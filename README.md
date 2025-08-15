@@ -3,7 +3,7 @@
 # ComfyUI Benchmarking Framework
 ## Running the Benchmark
 The benchmarking framework works by running prebuilt benchmarking packages. These packages contain all the necessary primary and secondary model files required to run a dedicated benchmark workflow. Workflow files are ComfyUI json workflow files configured for running using the ComfyUI API mode.
-Information on creating benchmark package files can be found in the Benchmark Package section of this document.
+Information on creating benchmark package files can be found in the [Benchmark Package](#benchmark-package-format) section of this document.
 
 **Warmup:**  The each benchmarking run will perform an initial warmup run to load models into memory and initialize the pipeline, the warmup time is not included in any of the benchmarking metrics.
 
