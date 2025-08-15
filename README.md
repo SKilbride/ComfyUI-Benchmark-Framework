@@ -21,6 +21,11 @@ Run multiple ComfyUI instances for simultaneous image generations.
 	-r, --run_default Use default recipe (baseconfig.json)
 	-l, --log Log console output to a file*. *If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).
 
+Sample command: (*Assumes a comfy portable installation with the script located in the same folder as the run_nvidia_gpu.bat file*)
+
+    python_embedded\python run_comfyui_instances_concurrent.py -c .\ComfyUI -w c:\workflows\wan_2.2_i2v_14b_640x640x81x20s.zip -r -l
+The sample command uses ComfyUI's embedded python version, however a system installed python can be used if desired.
+
 ## Benchmarking Options:
 The comfy path (-c) and workflow path (-w) are required. All other arguments are optional and if omitted the default values will be used by the benchmark framework.
 **COMFY PATH** [-c, --comfy_path]
