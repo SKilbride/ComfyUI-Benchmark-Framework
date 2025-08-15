@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 from threading import Thread, Event, Lock
 from queue import Queue
+from datetime import datetime
 
 def queue_prompt(prompt, client_id, server_address):
     data = {"prompt": prompt, "client_id": client_id}
@@ -127,7 +128,7 @@ def check_server_ready(port, timeout=60, interval=2):
     print(f"Error: Server on port {port} not ready after {timeout} seconds")
     return False
 
-def capture_execution_times(proc, output_queue, capture_event, print_lock):
+def capture_execution_times(proc, output_queue, capture_event, print_lock, log_file=None):
     """Capture execution times and handle progress bars from ComfyUI output."""
     pattern = re.compile(r"Prompt executed in (\d+\.\d+) seconds")
     progress_pattern = re.compile(r"\d+%\|.*?\| \d+/\d+ \[\d+:\d+.*?\d+\.\d+(?:it/s|s/it)\]")
@@ -151,26 +152,47 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock):
                 if error_pattern.search(line):
                     error_detected = True
                     print(line, flush=True)
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(line + '\n')
                 elif progress_pattern.search(line):
                     progress_buffer.append(line)
                     print(f"\r{' ' * 120}\r{progress_buffer[-1]}", end='', flush=True)
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(progress_buffer[-1] + '\n')
                 else:
                     if progress_buffer:
                         print(f"\n{progress_buffer[-1]}", flush=True)
+                        if log_file:
+                            with open(log_file, 'a', encoding='utf-8') as f:
+                                f.write(progress_buffer[-1] + '\n')
                         progress_buffer = []
                     print(line, flush=True)
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(line + '\n')
             if capture_event.is_set() and not error_detected:
                 match = pattern.search(line)
                 if match:
                     exec_time = float(match.group(1))
                     if exec_time > 1.0:  # Ignore invalid times
-                        print(f"\nDEBUG: Captured execution time: {exec_time} seconds", flush=True)
+                        print("\n")
+                        if log_file:
+                            with open(log_file, 'a', encoding='utf-8') as f:
+                                f.write("\n")
                         output_queue.put(exec_time)
             if error_pattern.search(line):
                 print("\nDEBUG: Detected ComfyUI processing error", flush=True)
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write("DEBUG: Detected ComfyUI processing error\n")
     with print_lock:
         if progress_buffer:
             print(f"\n{progress_buffer[-1]}", flush=True)
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(progress_buffer[-1] + '\n')
 
 def main():
     # Force tqdm to use ASCII characters
@@ -186,6 +208,7 @@ def main():
     parser.add_argument("-g", "--generations", type=int, default=1, help="Number of generations per instance.")
     parser.add_argument("-e", "--extract_minimal", action="store_true", help="Extract only .json files from ZIP.")
     parser.add_argument("-r", "--run_default", action="store_true", help="Use default recipe (baseconfig.json)")
+    parser.add_argument("-l", "--log", nargs='?', const=True, default=False, help="Log console output to a file. If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).")
     args = parser.parse_args()
 
     # Validate arguments
@@ -196,9 +219,36 @@ def main():
         print("Error: --generations must be at least 1.")
         sys.exit(1)
 
+    # Handle logging
+    log_file = None
+    if args.log is not False:
+        workflow_basename = Path(args.workflow_path).stem
+        timestamp = datetime.now().strftime("%y%m%d_") + str(int(time.time()))
+        if args.log is True:
+            # Default log file: workflow basename + timestamp
+            log_file = Path(f"{workflow_basename}_{timestamp}.txt").resolve()
+        else:
+            # User provided a path
+            log_path = Path(args.log).resolve()
+            if log_path.is_dir():
+                # If it's a directory, append default filename
+                log_file = log_path / f"{workflow_basename}_{timestamp}.txt"
+            elif log_path.parent.exists():
+                # If it's a file path and parent directory exists, use as is
+                log_file = log_path
+            else:
+                print(f"Error: Invalid log path or directory does not exist: {log_path}")
+                sys.exit(1)
+        # Ensure log file directory exists
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        print(f"Logging output to: {log_file}")
+
     comfy_path = Path(args.comfy_path).resolve()
     if not (comfy_path / "main.py").exists():
-        print("Error: main.py not found in the provided ComfyUI path.")
+        print(f"Error: main.py not found in the provided ComfyUI path.")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Error: main.py not found in the provided ComfyUI path.\n")
         sys.exit(1)
 
     # Handle workflow path
@@ -224,6 +274,9 @@ def main():
             zip_basename = workflow_path.stem
             temp_dir = comfy_path / "temp" / zip_basename
             print(f"Extracting ZIP file: {workflow_path} to {temp_dir}")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
             # Extract ZIP to temp directory
             extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
             config_path = temp_dir / config_filename
@@ -237,14 +290,26 @@ def main():
                 num_instances = config.get("NUM_INSTANCES", args.num_instances)
                 generations = config.get("GENERATIONS", args.generations)
                 print(f"Loaded config from {config_path}: num_instances={num_instances}, generations={generations}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Loaded config from {config_path}: num_instances={num_instances}, generations={generations}\n")
             except json.JSONDecodeError as e:
                 print(f"Error: {config_path} is not a valid JSON file.")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Error: {config_path} is not a valid JSON file.\n")
                 raise e
             except Exception as e:
                 print(f"Error reading {config_path}: {e}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Error reading {config_path}: {e}\n")
                 raise
         else:
             print(f"Error: Config file {config_filename} not found in {temp_dir if workflow_path.suffix.lower() == '.zip' else comfy_path}.")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Error: Config file {config_filename} not found in {temp_dir if workflow_path.suffix.lower() == '.zip' else comfy_path}.\n")
             sys.exit(1)
 
     try:
@@ -254,11 +319,23 @@ def main():
                 zip_basename = workflow_path.stem
                 temp_dir = comfy_path / "temp" / zip_basename
                 print(f"Extracting ZIP file: {workflow_path} to {temp_dir}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
                 extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
 
             # Run pre.py if it exists
             pre_script_path = temp_dir / "pre.py"
-            run_python_script(pre_script_path, temp_dir)
+            if pre_script_path.exists():
+                print(f"Running {pre_script_path}...")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Running {pre_script_path}...\n")
+                run_python_script(pre_script_path, temp_dir)
+                print(f"Successfully ran {pre_script_path}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Successfully ran {pre_script_path}\n")
 
             # Copy folders from extracted ComfyUI folder (only if not minimal extraction)
             if not args.extract_minimal:
@@ -269,6 +346,9 @@ def main():
                             target_path = comfy_path / item.name
                             shutil.copytree(item, target_path, dirs_exist_ok=True)
                             print(f"Copied folder {item.name} to: {target_path}")
+                            if log_file:
+                                with open(log_file, 'a', encoding='utf-8') as f:
+                                    f.write(f"Copied folder {item.name} to: {target_path}\n")
 
                     # Check for custom_nodes in extracted ComfyUI and install requirements
                     custom_nodes_extracted = comfyui_extracted / "custom_nodes"
@@ -278,24 +358,48 @@ def main():
                                 requirements_path = node_folder / "requirements.txt"
                                 if requirements_path.exists():
                                     print(f"Installing requirements for {node_folder.name}...")
+                                    if log_file:
+                                        with open(log_file, 'a', encoding='utf-8') as f:
+                                            f.write(f"Installing requirements for {node_folder.name}...\n")
                                     try:
                                         subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)], cwd=node_folder)
                                         print(f"Installed requirements for {node_folder.name}")
+                                        if log_file:
+                                            with open(log_file, 'a', encoding='utf-8') as f:
+                                                f.write(f"Installed requirements for {node_folder.name}\n")
                                     except subprocess.CalledProcessError as e:
                                         print(f"Error installing requirements for {node_folder.name}: {e}. Continuing...")
+                                        if log_file:
+                                            with open(log_file, 'a', encoding='utf-8') as f:
+                                                f.write(f"Error installing requirements for {node_folder.name}: {e}. Continuing...\n")
 
             # Run post.py if it exists
             post_script_path = temp_dir / "post.py"
-            run_python_script(post_script_path, temp_dir)
+            if post_script_path.exists():
+                print(f"Running {post_script_path}...")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Running {post_script_path}...\n")
+                run_python_script(post_script_path, temp_dir)
+                print(f"Successfully ran {post_script_path}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Successfully ran {post_script_path}\n")
 
             # Warn if ComfyUI folder is missing in minimal extraction
             if args.extract_minimal and not (temp_dir / "ComfyUI").exists():
                 print("Warning: --extract_minimal was specified, but ComfyUI folder is missing. Ensure workflow.json is at the root of the ZIP.")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write("Warning: --extract_minimal was specified, but ComfyUI folder is missing. Ensure workflow.json is at the root of the ZIP.\n")
 
             # Load main workflow
             main_workflow_path = temp_dir / "workflow.json"
             if not main_workflow_path.exists():
                 print(f"Error: workflow.json not found in extracted ZIP.")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Error: workflow.json not found in extracted ZIP.\n")
                 sys.exit(1)
             main_workflow = load_workflow(main_workflow_path)
 
@@ -311,6 +415,9 @@ def main():
             warmup_workflow = main_workflow
         else:
             print("Error: --workflow_path must be a .json or .zip file.")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write("Error: --workflow_path must be a .json or .zip file.\n")
             sys.exit(1)
 
         processes = []
@@ -320,6 +427,9 @@ def main():
         capture_events = [Event() for _ in range(num_instances)]
 
         print(f"Starting {num_instances} ComfyUI instances...")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Starting {num_instances} ComfyUI instances...\n")
 
         for i in range(num_instances):
             port = base_port + i
@@ -335,12 +445,20 @@ def main():
             )
             processes.append(proc)
             print(f"Started instance {i+1} on port {port} (PID: {proc.pid})")
-            Thread(target=capture_execution_times, args=(proc, output_queues[i], capture_events[i], print_lock), daemon=True).start()
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Started instance {i+1} on port {port} (PID: {proc.pid})\n")
+            Thread(target=capture_execution_times, args=(proc, output_queues[i], capture_events[i], print_lock, log_file), daemon=True).start()
 
         # Wait for servers to start
         for port in ports:
             if not check_server_ready(port, timeout=60):
-                raise RuntimeError(f"ComfyUI server on port {port} failed to start.")
+                error_msg = f"ComfyUI server on port {port} failed to start."
+                print(error_msg)
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(error_msg + "\n")
+                raise RuntimeError(error_msg)
 
         client_ids = [str(uuid.uuid4()) for _ in ports]
 
@@ -358,18 +476,34 @@ def main():
                 prompt_id = queue_prompt(prompt, client_id, server_address)
                 if is_warmup:
                     print(f"Queued warmup on instance {idx+1} (prompt_id: {prompt_id})")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Queued warmup on instance {idx+1} (prompt_id: {prompt_id})\n")
                 else:
                     capture_events[idx].set()
                     print(f"Queued generation {gen+1} on instance {idx+1} (prompt_id: {prompt_id})")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Queued generation {gen+1} on instance {idx+1} (prompt_id: {prompt_id})\n")
                 history = wait_for_completion(prompt_id, server_address)
                 if is_warmup:
                     print(f"Completed warmup on instance {idx+1}")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Completed warmup on instance {idx+1}\n")
                 else:
                     print(f"Completed generation {gen+1} on instance {idx+1}")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Completed generation {gen+1} on instance {idx+1}\n\n")
             except Exception as e:
                 error_msg = f"Error during {'warmup' if is_warmup else f'generation {gen+1}'} on instance {idx+1}: {e}"
                 if "ZeroDivisionError" in str(e) or "integer division or modulo by zero" in str(e):
                     error_msg += "\nThis error suggests an issue with the KSampler node in workflow.json. Please verify 'steps' (> 0), 'start_step' (>= 0), 'last_step' (> start_step and <= steps), 'cfg' (> 0), 'denoise' (0–1), 'sampler_name' (e.g., 'dpmpp_2m'), and 'scheduler' (e.g., 'normal'). Alternatively, test the workflow in the ComfyUI GUI."
+                    print(error_msg)
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(error_msg + "\n")
                     raise RuntimeError(error_msg) from e
                 raise e
             finally:
@@ -378,6 +512,9 @@ def main():
 
         # Warmup step
         print("Performing warmup...")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write("Performing warmup...\n")
         with ThreadPoolExecutor(max_workers=num_instances) as executor:
             futures = [executor.submit(generation_task, idx, -1, is_warmup=True) for idx in range(num_instances)]
             for future in as_completed(futures):
@@ -385,9 +522,15 @@ def main():
                     future.result()
                 except Exception as e:
                     print(f"Exception during warmup: {e}")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Exception during warmup: {e}\n")
                     raise
 
         print("Warmup completed.")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write("Warmup completed.\n")
 
         # Clear queues to ensure no stale data
         for queue in output_queues:
@@ -400,6 +543,9 @@ def main():
         try:
             for gen in range(generations):
                 print(f"Starting generation round {gen+1}/{generations}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Starting generation round {gen+1}/{generations}\n")
                 with ThreadPoolExecutor(max_workers=num_instances) as executor:
                     futures = [executor.submit(generation_task, idx, gen, is_warmup=False) for idx in range(num_instances)]
                     for future in as_completed(futures):
@@ -407,9 +553,15 @@ def main():
                             future.result()
                         except Exception as e:
                             print(f"Exception in generation round {gen+1}: {e}")
+                            if log_file:
+                                with open(log_file, 'a', encoding='utf-8') as f:
+                                    f.write(f"Exception in generation round {gen+1}: {e}\n")
                             raise
         except KeyboardInterrupt:
             print("Interrupted by user. Calculating partial metrics...")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write("Interrupted by user. Calculating partial metrics...\n")
             raise
 
         # Capture end timestamp
@@ -432,15 +584,26 @@ def main():
         else:
             images_per_minute = 0
             avg_time_per_image = 0
-
+        print('####_RESULTS_SUMMARY_####\n')
         print(f"Total time to generate {total_images} images: {total_time:.2f} seconds")
         print(f"Number of images per minute: {images_per_minute:.2f}")
         print(f"Average time (secs) per image: {avg_time_per_image:.2f}")
         print(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds")
         print(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write('####_RESULTS_SUMMARY_####\n')
+                f.write(f"Total time to generate {total_images} images: {total_time:.2f} seconds\n")
+                f.write(f"Number of images per minute: {images_per_minute:.2f}\n")
+                f.write(f"Average time (secs) per image: {avg_time_per_image:.2f}\n")
+                f.write(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds\n")
+                f.write(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds\n")
 
     except KeyboardInterrupt:
         print("Cleaning up after user interrupt...")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write("Cleaning up after user interrupt...\n")
         # Calculate partial metrics
         end_time = time.time()
         total_time = end_time - start_time
@@ -463,9 +626,18 @@ def main():
         print(f"Average time (secs) per image: {avg_time_per_image:.2f}")
         print(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds")
         print(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Partial metrics for {total_images} images:\n")
+                f.write(f"Total time: {total_time:.2f} seconds\n")
+                f.write(f"Number of images per minute: {images_per_minute:.2f}\n")
+                f.write(f"Average time (secs) per image: {avg_time_per_image:.2f}\n")
+                f.write(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds\n")
+                f.write(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds\n")
     finally:
         # Clean up: Terminate processes and remove temp directory
-        print("Cleaning up...")
+        # print("Cleaning up...")
+        
         for i, proc in enumerate(processes):
             port = base_port + i
             try:
@@ -479,6 +651,9 @@ def main():
                             proc.wait(timeout=5)
             except Exception as e:
                 print(f"Error terminating process {proc.pid}: {e}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Error terminating process {proc.pid}: {e}\n")
                 with open(os.devnull, 'w') as devnull:
                     proc.stderr = devnull
                     proc.terminate()
@@ -486,8 +661,15 @@ def main():
         if temp_dir and temp_dir.exists():
             shutil.rmtree(temp_dir, ignore_errors=True)
             print(f"Removed temporary directory: {temp_dir}")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Removed temporary directory: {temp_dir}\n")
 
         print("Done.")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                #f.write("Done\n")
+                print(f"Logfile written to: {log_file}\n")
 
 if __name__ == "__main__":
     main()
