@@ -208,6 +208,7 @@ def main():
     parser.add_argument("-g", "--generations", type=int, default=1, help="Number of generations per instance.")
     parser.add_argument("-e", "--extract_minimal", action="store_true", help="Extract only .json files from ZIP.")
     parser.add_argument("-r", "--run_default", action="store_true", help="Use default recipe (baseconfig.json)")
+    parser.add_argument("-d", "--useDML", action="store_true", help="Use DML for generation")
     parser.add_argument("-l", "--log", nargs='?', const=True, default=False, help="Log console output to a file. If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).")
     args = parser.parse_args()
 
@@ -324,6 +325,22 @@ def main():
                         f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
                 extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
 
+            if temp_dir.exists():
+                save_workflow_dir=comfy_path / 'user/default/workflows' / zip_basename
+                if not save_workflow_dir.exists():
+                    save_workflow_dir.mkdir(parents=True, exist_ok=True)
+                print(f"Saving workflow to: {save_workflow_dir}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Saving workflow to: {save_workflow_dir}\n")
+                # Copy only .json files
+                for json_file in temp_dir.glob("*.json"):
+                    shutil.copy2(json_file, save_workflow_dir)
+                print(f"Saved workflow to: {save_workflow_dir}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Saved workflow to: {save_workflow_dir}\n")
+
             # Run pre.py if it exists
             pre_script_path = temp_dir / "pre.py"
             if pre_script_path.exists():
@@ -343,6 +360,10 @@ def main():
                 if comfyui_extracted.exists() and comfyui_extracted.is_dir():
                     for item in comfyui_extracted.iterdir():
                         if item.is_dir():
+                            print(f"Begin folder copy: {item.name} ")
+                            if log_file:
+                                with open(log_file, 'a', encoding='utf-8') as f:
+                                    f.write(f"Begin folder copy: {item.name}\n")
                             target_path = comfy_path / item.name
                             shutil.copytree(item, target_path, dirs_exist_ok=True)
                             print(f"Copied folder {item.name} to: {target_path}")
@@ -434,8 +455,13 @@ def main():
         for i in range(num_instances):
             port = base_port + i
             ports.append(port)
+            command = ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"]
+
+            if args.useDML:
+                command.append("--directml")
+           
             proc = subprocess.Popen(
-                ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"],
+                command,
                 cwd=comfy_path,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
                 stdout=subprocess.PIPE,
