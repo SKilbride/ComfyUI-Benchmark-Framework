@@ -229,8 +229,8 @@ def main():
     parser.add_argument("-g", "--generations", type=int, default=1, help="Number of generations per instance.")
     parser.add_argument("-e", "--extract_minimal", action="store_true", help="Extract only .json files from ZIP.")
     parser.add_argument("-r", "--run_default", action="store_true", help="Use default recipe (baseconfig.json)")
-    parser.add_argument("-d", "--useDML", action="store_true", help="Use DML for generation")
     parser.add_argument("-l", "--log", nargs='?', const=True, default=False, help="Log console output to a file. If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).")
+    parser.add_argument("--extra_args", nargs='*', default=[], help="Additional arguments to pass to main.py (e.g., --cpu, --num_gpus 2).")
     args = parser.parse_args()
     # Validate arguments
     if args.num_instances < 1:
@@ -239,6 +239,23 @@ def main():
     if args.generations < 1:
         print("Error: --generations must be at least 1.")
         sys.exit(1)
+    # Validate extra_args
+    extra_args = []
+    i = 0
+    while i < len(args.extra_args):
+        arg = args.extra_args[i]
+        if not arg.startswith('--'):
+            print(f"Error: Invalid extra argument '{arg}'. All extra arguments must start with '--'.")
+            sys.exit(1)
+        if i + 1 < len(args.extra_args) and not args.extra_args[i + 1].startswith('--'):
+            # Flag with value
+            extra_args.append(arg)
+            extra_args.append(args.extra_args[i + 1])
+            i += 2
+        else:
+            # Standalone flag
+            extra_args.append(arg)
+            i += 1
     # Handle logging
     log_file = None
     if args.log is not False:
@@ -457,9 +474,7 @@ def main():
             port = base_port + i
             ports.append(port)
             command = ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"]
-            if args.useDML:
-                command.append("--directml")
-          
+            command.extend(extra_args)  # Append extra arguments
             proc = subprocess.Popen(
                 command,
                 cwd=comfy_path,
@@ -470,10 +485,10 @@ def main():
                 bufsize=1
             )
             processes.append(proc)
-            print(f"Started instance {i+1} on port {port} (PID: {proc.pid})")
+            print(f"Started instance {i+1} on port {port} (PID: {proc.pid}) with command: {' '.join(command)}")
             if log_file:
                 with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write(f"Started instance {i+1} on port {port} (PID: {proc.pid})\n")
+                    f.write(f"Started instance {i+1} on port {port} (PID: {proc.pid}) with command: {' '.join(command)}\n")
             Thread(target=capture_execution_times, args=(proc, output_queues[i], capture_events[i], print_lock, log_file), daemon=True).start()
         # Wait for servers to start
         for port in ports:
@@ -652,8 +667,6 @@ def main():
                 f.write(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds\n")
     finally:
         # Clean up: Terminate processes and remove temp directory
-        # print("Cleaning up...")
-       
         for i, proc in enumerate(processes):
             port = base_port + i
             try:
@@ -683,9 +696,7 @@ def main():
         print("Done.")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
-                #f.write("Done\n")
                 print(f"Logfile written to: {log_file}\n")
 
 if __name__ == "__main__":
-
     main()
