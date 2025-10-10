@@ -41,32 +41,54 @@ def load_workflow(workflow_path):
     try:
         with open(workflow_path, 'r', encoding='utf-8') as f:
             workflow = json.load(f)
-        # Validate KSampler parameters
+        # Validate KSampler and KSamplerAdvanced parameters
         for node_id, node in workflow.items():
-            if node.get("class_type") == "KSampler":
+            class_type = node.get("class_type")
+            if class_type in ["KSampler", "KSamplerAdvanced"]:
                 inputs = node.get("inputs", {})
-                steps = inputs.get("steps")
-                start_step = inputs.get("start_step", 0)
-                last_step = inputs.get("last_step", steps)
-                cfg = inputs.get("cfg")
-                denoise = inputs.get("denoise")
-                sampler_name = inputs.get("sampler_name")
-                scheduler = inputs.get("scheduler")
-                print(f"DEBUG: KSampler node {node_id} - steps: {steps}, start_step: {start_step}, last_step: {last_step}, cfg: {cfg}, denoise: {denoise}, sampler_name: {sampler_name}, scheduler: {scheduler}")
-                if not isinstance(steps, int) or steps <= 0:
-                    raise ValueError(f"Invalid KSampler steps ({steps}) in node {node_id}. Must be a positive integer (e.g., 20).")
-                if not isinstance(start_step, int) or start_step < 0:
-                    raise ValueError(f"Invalid KSampler start_step ({start_step}) in node {node_id}. Must be a non-negative integer.")
-                if last_step is not None and (not isinstance(last_step, int) or last_step <= start_step or last_step > steps):
-                    raise ValueError(f"Invalid KSampler last_step ({last_step}) in node {node_id}. Must be an integer > start_step and <= steps.")
-                if not isinstance(cfg, (int, float)) or cfg <= 0:
-                    raise ValueError(f"Invalid KSampler cfg ({cfg}) in node {node_id}. Must be a positive number.")
-                if not isinstance(denoise, (int, float)) or denoise < 0 or denoise > 1:
-                    raise ValueError(f"Invalid KSampler denoise ({denoise}) in node {node_id}. Must be between 0 and 1.")
-                if not sampler_name:
-                    raise ValueError(f"Missing KSampler sampler_name in node {node_id}.")
-                if not scheduler:
-                    raise ValueError(f"Missing KSampler scheduler in node {node_id}.")
+                if class_type == "KSampler":
+                    steps = inputs.get("steps")
+                    start_step = inputs.get("start_step", 0)
+                    last_step = inputs.get("last_step", steps)
+                    cfg = inputs.get("cfg")
+                    denoise = inputs.get("denoise")
+                    sampler_name = inputs.get("sampler_name")
+                    scheduler = inputs.get("scheduler")
+                    print(f"DEBUG: KSampler node {node_id} - steps: {steps}, start_step: {start_step}, last_step: {last_step}, cfg: {cfg}, denoise: {denoise}, sampler_name: {sampler_name}, scheduler: {scheduler}")
+                    if not isinstance(steps, int) or steps <= 0:
+                        raise ValueError(f"Invalid KSampler steps ({steps}) in node {node_id}. Must be a positive integer (e.g., 20).")
+                    if not isinstance(start_step, int) or start_step < 0:
+                        raise ValueError(f"Invalid KSampler start_step ({start_step}) in node {node_id}. Must be a non-negative integer.")
+                    if last_step is not None and (not isinstance(last_step, int) or last_step <= start_step or last_step > steps):
+                        raise ValueError(f"Invalid KSampler last_step ({last_step}) in node {node_id}. Must be an integer > start_step and <= steps.")
+                    if not isinstance(cfg, (int, float)) or cfg <= 0:
+                        raise ValueError(f"Invalid KSampler cfg ({cfg}) in node {node_id}. Must be a positive number.")
+                    if not isinstance(denoise, (int, float)) or denoise < 0 or denoise > 1:
+                        raise ValueError(f"Invalid KSampler denoise ({denoise}) in node {node_id}. Must be between 0 and 1.")
+                    if not sampler_name:
+                        raise ValueError(f"Missing KSampler sampler_name in node {node_id}.")
+                    if not scheduler:
+                        raise ValueError(f"Missing KSampler scheduler in node {node_id}.")
+                elif class_type == "KSamplerAdvanced":
+                    steps = inputs.get("steps")
+                    cfg = inputs.get("cfg")
+                    sampler_name = inputs.get("sampler_name")
+                    scheduler = inputs.get("scheduler")
+                    start_at_step = inputs.get("start_at_step")
+                    end_at_step = inputs.get("end_at_step")
+                    print(f"DEBUG: KSamplerAdvanced node {node_id} - steps: {steps}, cfg: {cfg}, sampler_name: {sampler_name}, scheduler: {scheduler}, start_at_step: {start_at_step}, end_at_step: {end_at_step}")
+                    if not isinstance(steps, int) or steps <= 0:
+                        raise ValueError(f"Invalid KSamplerAdvanced steps ({steps}) in node {node_id}. Must be a positive integer (e.g., 20).")
+                    if not isinstance(cfg, (int, float)) or cfg <= 0:
+                        raise ValueError(f"Invalid KSamplerAdvanced cfg ({cfg}) in node {node_id}. Must be a positive number.")
+                    if not sampler_name:
+                        raise ValueError(f"Missing KSamplerAdvanced sampler_name in node {node_id}.")
+                    if not scheduler:
+                        raise ValueError(f"Missing KSamplerAdvanced scheduler in node {node_id}.")
+                    if not isinstance(start_at_step, int) or start_at_step < 0:
+                        raise ValueError(f"Invalid KSamplerAdvanced start_at_step ({start_at_step}) in node {node_id}. Must be a non-negative integer.")
+                    if not isinstance(end_at_step, int) or end_at_step <= start_at_step:
+                        raise ValueError(f"Invalid KSamplerAdvanced end_at_step ({end_at_step}) in node {node_id}. Must be an integer > start_at_step.")
         return workflow
     except UnicodeDecodeError as e:
         print(f"Error: Failed to decode {workflow_path}. Ensure the file is encoded in UTF-8.")
@@ -176,7 +198,7 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
                 match = pattern.search(line)
                 if match:
                     exec_time = float(match.group(1))
-                    if exec_time > 1.0:  # Ignore invalid times
+                    if exec_time > 1.0: # Ignore invalid times
                         print("\n")
                         if log_file:
                             with open(log_file, 'a', encoding='utf-8') as f:
@@ -196,11 +218,10 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
 
 def main():
     # Force tqdm to use ASCII characters
-    # os.environ['TQDM_ASCII'] = '1'  # Temporarily commented to test impact
+    # os.environ['TQDM_ASCII'] = '1' # Temporarily commented to test impact
     # Set console encoding to UTF-8
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
-
     parser = argparse.ArgumentParser(description="Run multiple ComfyUI instances for simultaneous image generations.")
     parser.add_argument("-n", "--num_instances", type=int, default=1, help="Number of simultaneous ComfyUI instances.")
     parser.add_argument("-c", "--comfy_path", required=True, help="Path to the ComfyUI directory.")
@@ -211,7 +232,6 @@ def main():
     parser.add_argument("-d", "--useDML", action="store_true", help="Use DML for generation")
     parser.add_argument("-l", "--log", nargs='?', const=True, default=False, help="Log console output to a file. If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).")
     args = parser.parse_args()
-
     # Validate arguments
     if args.num_instances < 1:
         print("Error: --num_instances must be at least 1.")
@@ -219,7 +239,6 @@ def main():
     if args.generations < 1:
         print("Error: --generations must be at least 1.")
         sys.exit(1)
-
     # Handle logging
     log_file = None
     if args.log is not False:
@@ -243,7 +262,6 @@ def main():
         # Ensure log file directory exists
         log_file.parent.mkdir(parents=True, exist_ok=True)
         print(f"Logging output to: {log_file}")
-
     comfy_path = Path(args.comfy_path).resolve()
     if not (comfy_path / "main.py").exists():
         print(f"Error: main.py not found in the provided ComfyUI path.")
@@ -251,7 +269,6 @@ def main():
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(f"Error: main.py not found in the provided ComfyUI path.\n")
         sys.exit(1)
-
     # Handle workflow path
     workflow_path = Path(args.workflow_path).resolve()
     main_workflow = None
@@ -261,14 +278,12 @@ def main():
     output_queues = []
     capture_events = []
     print_lock = Lock()
-
     # Initialize default values
     num_instances = args.num_instances
     generations = args.generations
-
     # Check for --run_default flag and load JSON file
     if args.run_default:
-        config_filename = "baseconfig.json"  # Default config file
+        config_filename = "baseconfig.json" # Default config file
         config_path = None
         if workflow_path.suffix.lower() == '.zip':
             # Create temp directory with ZIP basename
@@ -283,7 +298,6 @@ def main():
             config_path = temp_dir / config_filename
         elif workflow_path.suffix.lower() == '.json':
             config_path = comfy_path / config_filename
-
         if config_path and config_path.exists():
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
@@ -312,7 +326,6 @@ def main():
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(f"Error: Config file {config_filename} not found in {temp_dir if workflow_path.suffix.lower() == '.zip' else comfy_path}.\n")
             sys.exit(1)
-
     try:
         if workflow_path.suffix.lower() == '.zip':
             # Temp directory is already created if run_default was processed
@@ -324,7 +337,6 @@ def main():
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
                 extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
-
             if temp_dir.exists():
                 save_workflow_dir=comfy_path / 'user/default/workflows' / zip_basename
                 if not save_workflow_dir.exists():
@@ -340,7 +352,6 @@ def main():
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"Saved workflow to: {save_workflow_dir}\n")
-
             # Run pre.py if it exists
             pre_script_path = temp_dir / "pre.py"
             if pre_script_path.exists():
@@ -353,7 +364,6 @@ def main():
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"Successfully ran {pre_script_path}\n")
-
             # Copy folders from extracted ComfyUI folder (only if not minimal extraction)
             if not args.extract_minimal:
                 comfyui_extracted = temp_dir / "ComfyUI"
@@ -370,7 +380,6 @@ def main():
                             if log_file:
                                 with open(log_file, 'a', encoding='utf-8') as f:
                                     f.write(f"Copied folder {item.name} to: {target_path}\n")
-
                     # Check for custom_nodes in extracted ComfyUI and install requirements
                     custom_nodes_extracted = comfyui_extracted / "custom_nodes"
                     if custom_nodes_extracted.exists() and custom_nodes_extracted.is_dir():
@@ -393,7 +402,6 @@ def main():
                                         if log_file:
                                             with open(log_file, 'a', encoding='utf-8') as f:
                                                 f.write(f"Error installing requirements for {node_folder.name}: {e}. Continuing...\n")
-
             # Run post.py if it exists
             post_script_path = temp_dir / "post.py"
             if post_script_path.exists():
@@ -406,14 +414,12 @@ def main():
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"Successfully ran {post_script_path}\n")
-
             # Warn if ComfyUI folder is missing in minimal extraction
             if args.extract_minimal and not (temp_dir / "ComfyUI").exists():
                 print("Warning: --extract_minimal was specified, but ComfyUI folder is missing. Ensure workflow.json is at the root of the ZIP.")
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write("Warning: --extract_minimal was specified, but ComfyUI folder is missing. Ensure workflow.json is at the root of the ZIP.\n")
-
             # Load main workflow
             main_workflow_path = temp_dir / "workflow.json"
             if not main_workflow_path.exists():
@@ -423,14 +429,12 @@ def main():
                         f.write(f"Error: workflow.json not found in extracted ZIP.\n")
                 sys.exit(1)
             main_workflow = load_workflow(main_workflow_path)
-
             # Load warmup workflow if it exists
             warmup_workflow_path = temp_dir / "warmup.json"
             if warmup_workflow_path.exists():
                 warmup_workflow = load_workflow(warmup_workflow_path)
             else:
                 warmup_workflow = main_workflow
-
         elif workflow_path.suffix.lower() == '.json':
             main_workflow = load_workflow(workflow_path)
             warmup_workflow = main_workflow
@@ -440,26 +444,22 @@ def main():
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write("Error: --workflow_path must be a .json or .zip file.\n")
             sys.exit(1)
-
         processes = []
         ports = []
         base_port = 8188
         output_queues = [Queue() for _ in range(num_instances)]
         capture_events = [Event() for _ in range(num_instances)]
-
         print(f"Starting {num_instances} ComfyUI instances...")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(f"Starting {num_instances} ComfyUI instances...\n")
-
         for i in range(num_instances):
             port = base_port + i
             ports.append(port)
             command = ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"]
-
             if args.useDML:
                 command.append("--directml")
-           
+          
             proc = subprocess.Popen(
                 command,
                 cwd=comfy_path,
@@ -475,7 +475,6 @@ def main():
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(f"Started instance {i+1} on port {port} (PID: {proc.pid})\n")
             Thread(target=capture_execution_times, args=(proc, output_queues[i], capture_events[i], print_lock, log_file), daemon=True).start()
-
         # Wait for servers to start
         for port in ports:
             if not check_server_ready(port, timeout=60):
@@ -485,9 +484,7 @@ def main():
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(error_msg + "\n")
                 raise RuntimeError(error_msg)
-
         client_ids = [str(uuid.uuid4()) for _ in ports]
-
         def generation_task(idx, gen, is_warmup=False):
             port = ports[idx]
             server_address = f"127.0.0.1:{port}"
@@ -495,9 +492,12 @@ def main():
             workflow = warmup_workflow if is_warmup else main_workflow
             prompt = json.loads(json.dumps(workflow))
             for node_id, node in prompt.items():
-                if node.get("class_type") == "KSampler" and "seed" in node.get("inputs", {}):
+                class_type = node.get("class_type")
+                inputs = node.get("inputs", {})
+                if class_type == "KSampler" and "seed" in inputs:
                     prompt[node_id]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
-                    break
+                elif class_type == "KSamplerAdvanced" and "noise_seed" in inputs:
+                    prompt[node_id]["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
             try:
                 prompt_id = queue_prompt(prompt, client_id, server_address)
                 if is_warmup:
@@ -525,17 +525,16 @@ def main():
             except Exception as e:
                 error_msg = f"Error during {'warmup' if is_warmup else f'generation {gen+1}'} on instance {idx+1}: {e}"
                 if "ZeroDivisionError" in str(e) or "integer division or modulo by zero" in str(e):
-                    error_msg += "\nThis error suggests an issue with the KSampler node in workflow.json. Please verify 'steps' (> 0), 'start_step' (>= 0), 'last_step' (> start_step and <= steps), 'cfg' (> 0), 'denoise' (0–1), 'sampler_name' (e.g., 'dpmpp_2m'), and 'scheduler' (e.g., 'normal'). Alternatively, test the workflow in the ComfyUI GUI."
+                    error_msg += "\nThis error suggests an issue with the KSampler or KSamplerAdvanced node in workflow.json. Please verify 'steps' (> 0), 'start_step' or 'start_at_step' (>= 0), 'last_step' or 'end_at_step' (> start_step/start_at_step and <= steps for KSampler), 'cfg' (> 0), 'denoise' (0–1 for KSampler), 'sampler_name' (e.g., 'dpmpp_2m' or 'euler'), and 'scheduler' (e.g., 'normal' or 'simple'). Alternatively, test the workflow in the ComfyUI GUI."
                     print(error_msg)
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
-                            f.write(error_msg + "\n")
+                        f.write(error_msg + "\n")
                     raise RuntimeError(error_msg) from e
                 raise e
             finally:
                 if not is_warmup:
                     capture_events[idx].clear()
-
         # Warmup step
         print("Performing warmup...")
         if log_file:
@@ -552,20 +551,16 @@ def main():
                         with open(log_file, 'a', encoding='utf-8') as f:
                             f.write(f"Exception during warmup: {e}\n")
                     raise
-
         print("Warmup completed.")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write("Warmup completed.\n")
-
         # Clear queues to ensure no stale data
         for queue in output_queues:
             while not queue.empty():
                 queue.get()
-
         # Capture start timestamp
         start_time = time.time()
-
         try:
             for gen in range(generations):
                 print(f"Starting generation round {gen+1}/{generations}")
@@ -589,21 +584,17 @@ def main():
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write("Interrupted by user. Calculating partial metrics...\n")
             raise
-
         # Capture end timestamp
         end_time = time.time()
         total_time = end_time - start_time
         total_images = num_instances * generations
-
         # Collect execution times
         execution_times = []
         for queue in output_queues:
             while not queue.empty():
                 execution_times.append(queue.get())
-
         total_execution_time = sum(execution_times)
         avg_execution_time = total_execution_time / len(execution_times) if execution_times else 0
-
         if total_time > 0 and total_images > 0:
             images_per_minute = total_images / (total_time / 60)
             avg_time_per_image = total_time / total_images
@@ -624,7 +615,6 @@ def main():
                 f.write(f"Average time (secs) per image: {avg_time_per_image:.2f}\n")
                 f.write(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds\n")
                 f.write(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds\n")
-
     except KeyboardInterrupt:
         print("Cleaning up after user interrupt...")
         if log_file:
@@ -663,7 +653,7 @@ def main():
     finally:
         # Clean up: Terminate processes and remove temp directory
         # print("Cleaning up...")
-        
+       
         for i, proc in enumerate(processes):
             port = base_port + i
             try:
@@ -690,7 +680,6 @@ def main():
             if log_file:
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(f"Removed temporary directory: {temp_dir}\n")
-
         print("Done.")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
