@@ -300,7 +300,7 @@ def main():
     generations = args.generations
     # Check for --run_default flag and load JSON file
     if args.run_default:
-        config_filename = "baseconfig.json" # Default config file
+        config_filename = "baseconfig.json"
         config_path = None
         if workflow_path.suffix.lower() == '.zip':
             # Create temp directory with ZIP basename
@@ -314,7 +314,7 @@ def main():
             extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
             config_path = temp_dir / config_filename
         elif workflow_path.suffix.lower() == '.json':
-            config_path = comfy_path / config_filename
+            config_path = workflow_path.parent / config_filename
         if config_path and config_path.exists():
             try:
                 with open(config_path, 'r', encoding='utf-8') as f:
@@ -338,11 +338,10 @@ def main():
                         f.write(f"Error reading {config_path}: {e}\n")
                 raise
         else:
-            print(f"Error: Config file {config_filename} not found in {temp_dir if workflow_path.suffix.lower() == '.zip' else comfy_path}.")
+            print(f"Warning: --run_default was specified, but {config_filename} not found in {config_path if config_path else 'workflow directory'}.")
             if log_file:
                 with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write(f"Error: Config file {config_filename} not found in {temp_dir if workflow_path.suffix.lower() == '.zip' else comfy_path}.\n")
-            sys.exit(1)
+                    f.write(f"Warning: --run_default was specified, but {config_filename} not found in {config_path if config_path else 'workflow directory'}.\n")
     try:
         if workflow_path.suffix.lower() == '.zip':
             # Temp directory is already created if run_default was processed
@@ -355,7 +354,7 @@ def main():
                         f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
                 extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
             if temp_dir.exists():
-                save_workflow_dir=comfy_path / 'user/default/workflows' / zip_basename
+                save_workflow_dir = comfy_path / 'user/default/workflows' / zip_basename
                 if not save_workflow_dir.exists():
                     save_workflow_dir.mkdir(parents=True, exist_ok=True)
                 print(f"Saving workflow to: {save_workflow_dir}")
@@ -449,12 +448,33 @@ def main():
             # Load warmup workflow if it exists
             warmup_workflow_path = temp_dir / "warmup.json"
             if warmup_workflow_path.exists():
+                print(f"Using warmup.json for warmup: {warmup_workflow_path}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Using warmup.json for warmup: {warmup_workflow_path}\n")
                 warmup_workflow = load_workflow(warmup_workflow_path)
             else:
+                print(f"warmup.json not found in {temp_dir}, using workflow.json for warmup")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"warmup.json not found in {temp_dir}, using workflow.json for warmup\n")
                 warmup_workflow = main_workflow
         elif workflow_path.suffix.lower() == '.json':
             main_workflow = load_workflow(workflow_path)
-            warmup_workflow = main_workflow
+            # Check for warmup.json in the same directory as the provided JSON
+            warmup_workflow_path = workflow_path.parent / "warmup.json"
+            if warmup_workflow_path.exists():
+                print(f"Using warmup.json for warmup: {warmup_workflow_path}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Using warmup.json for warmup: {warmup_workflow_path}\n")
+                warmup_workflow = load_workflow(warmup_workflow_path)
+            else:
+                print(f"warmup.json not found in {workflow_path.parent}, using {workflow_path.name} for warmup")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"warmup.json not found in {workflow_path.parent}, using {workflow_path.name} for warmup\n")
+                warmup_workflow = main_workflow
         else:
             print("Error: --workflow_path must be a .json or .zip file.")
             if log_file:
