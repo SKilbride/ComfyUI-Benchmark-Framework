@@ -529,7 +529,7 @@ def main():
                     print(error_msg)
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(error_msg + "\n")
+                            f.write(error_msg + "\n")
                     raise RuntimeError(error_msg) from e
                 raise e
             finally:
@@ -687,4 +687,5 @@ def main():
                 print(f"Logfile written to: {log_file}\n")
 
 if __name__ == "__main__":
+
     main()
