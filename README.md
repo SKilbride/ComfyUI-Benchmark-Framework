@@ -18,6 +18,7 @@ Run multiple ComfyUI instances for simultaneous image generations.
 	-r, --run_default Use default recipe (baseconfig.json)
 	-l, --log Log console output to a file*. *If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).
 	-n , --num_instances  Number of simultaneous ComfyUI instances.
+	--extra_args", nargs='*', default=[], help="Additional arguments to pass to main.py (e.g., --cpu, --num_gpus 2)
 
 
 Sample command: (*Assumes a comfy portable installation with the script located in the same folder as the run_nvidia_gpu.bat file*)
