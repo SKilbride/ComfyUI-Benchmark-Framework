@@ -529,10 +529,18 @@ def main():
             for node_id, node in prompt.items():
                 class_type = node.get("class_type")
                 inputs = node.get("inputs", {})
+                # Randomize seed for KSampler
                 if class_type == "KSampler" and "seed" in inputs:
                     prompt[node_id]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
+                # Randomize noise_seed for KSamplerAdvanced
                 elif class_type == "KSamplerAdvanced" and "noise_seed" in inputs:
                     prompt[node_id]["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
+                # Randomize value for PrimitiveInt nodes with title matching "Random" (case-insensitive)
+                elif class_type == "PrimitiveInt" and "value" in inputs:
+                    meta = node.get("_meta", {})
+                    title = meta.get("title", "")
+                    if re.search(r"Random", title, re.IGNORECASE):
+                        prompt[node_id]["inputs"]["value"] = random.randint(0, 2**32 - 1)
             try:
                 prompt_id = queue_prompt(prompt, client_id, server_address)
                 if is_warmup:
