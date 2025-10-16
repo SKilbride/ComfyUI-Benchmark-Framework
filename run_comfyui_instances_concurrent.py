@@ -35,12 +35,113 @@ def wait_for_completion(prompt_id, server_address):
                 return history
         time.sleep(1)
 
+def apply_overrides(workflow, override_path, log_file=None):
+    if not override_path or not os.path.exists(override_path):
+        return workflow, []
+    try:
+        with open(override_path, 'r', encoding='utf-8') as f:
+            overrides = json.load(f).get("overrides", {})
+        print(f"Override file specified: {override_path}")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Override file specified: {override_path}\n")
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        print(f"Error: Failed to parse override file {override_path}: {e}")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Error: Failed to parse override file {override_path}: {e}\n")
+        raise
+    modified_workflow = json.loads(json.dumps(workflow))  # Deep copy
+    applied_overrides = []  # Track overrides for summary
+    for override_key, override in overrides.items():
+        override_item = override.get("override_item")
+        override_value = override.get("override_value")
+        restrict = override.get("restrict", {})
+        if not override_item or override_value is None:
+            print(f"Warning: Skipping invalid override {override_key}: missing override_item or override_value")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Warning: Skipping invalid override {override_key}: missing override_item or override_value\n")
+            continue
+        matched_nodes = []
+        for node_id, node in modified_workflow.items():
+            # Check if node matches restriction criteria
+            matches = True
+            if restrict:
+                for restrict_key, restrict_value in restrict.items():
+                    if restrict_key == "id":
+                        if node_id != str(restrict_value):  # Ensure string comparison
+                            matches = False
+                            break
+                    elif restrict_key in node.get("_meta", {}):
+                        if node["_meta"].get(restrict_key) != restrict_value:
+                            matches = False
+                            break
+                    elif restrict_key in node:
+                        if node.get(restrict_key) != restrict_value:
+                            matches = False
+                            break
+                    else:
+                        matches = False
+                        break
+            if matches:
+                node_title = node.get("_meta", {}).get("title", "Untitled")
+                if override_item == "bypass":
+                    if override_value is True:
+                        # Add or update bypass: true
+                        modified_workflow[node_id]["bypass"] = True
+                        print(f"Applying override {override_key}: setting bypass to true in node {node_id} ({node_title})")
+                        if log_file:
+                            with open(log_file, 'a', encoding='utf-8') as f:
+                                f.write(f"Applying override {override_key}: setting bypass to true in node {node_id} ({node_title})\n")
+                        matched_nodes.append(f"{node_id} ({node_title})")
+                    elif override_value is False and node.get("bypass", False) is True:
+                        # Only update to false if bypass exists and is true
+                        modified_workflow[node_id]["bypass"] = False
+                        print(f"Applying override {override_key}: setting bypass to false in node {node_id} ({node_title})")
+                        if log_file:
+                            with open(log_file, 'a', encoding='utf-8') as f:
+                                f.write(f"Applying override {override_key}: setting bypass to false in node {node_id} ({node_title})\n")
+                        matched_nodes.append(f"{node_id} ({node_title})")
+                elif override_item in node.get("inputs", {}):
+                    # Handle regular input overrides
+                    print(f"Applying override {override_key}: setting {override_item} to {override_value} in node {node_id} ({node_title})")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Applying override {override_key}: setting {override_item} to {override_value} in node {node_id} ({node_title})\n")
+                    modified_workflow[node_id]["inputs"][override_item] = override_value
+                    matched_nodes.append(f"{node_id} ({node_title})")
+        if matched_nodes:
+            applied_overrides.append({
+                "key": override_key,
+                "item": override_item,
+                "value": override_value,
+                "nodes": matched_nodes
+            })
+        else:
+            print(f"Warning: Override {override_key} matched no nodes")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Warning: Override {override_key} matched no nodes\n")
+    return modified_workflow, applied_overrides
+
 def load_workflow(workflow_path):
     if not os.path.exists(workflow_path):
         raise FileNotFoundError(f"Workflow file not found: {workflow_path}")
     try:
         with open(workflow_path, 'r', encoding='utf-8') as f:
             workflow = json.load(f)
+        if not isinstance(workflow, dict):
+            raise ValueError(f"Error: {workflow_path} does not contain a valid JSON object (expected a dictionary).")
+        for node_id in workflow:
+            if not isinstance(node_id, str):
+                raise ValueError(f"Error: Invalid node ID {node_id} in {workflow_path}. Node IDs must be strings.")
+            if not isinstance(workflow[node_id], dict):
+                raise ValueError(f"Error: Node {node_id} in {workflow_path} is not a valid node dictionary.")
+            # Check for bypassed nodes
+            if workflow[node_id].get("bypass", False):
+                node_title = workflow[node_id].get("_meta", {}).get("title", "Untitled")
+                print(f"Node {node_id} ({node_title}) is bypassed")
         # Validate KSampler and KSamplerAdvanced parameters
         for node_id, node in workflow.items():
             class_type = node.get("class_type")
@@ -97,18 +198,104 @@ def load_workflow(workflow_path):
         print(f"Error: {workflow_path} is not a valid JSON file.")
         raise e
 
-def extract_zip(zip_path, extract_to, extract_minimal=False):
+def load_baseconfig(comfy_path, temp_dir=None, log_file=None):
+    baseconfig_path = Path(comfy_path) / "baseconfig.json"
+    paths_to_check = [baseconfig_path]
+    if temp_dir:
+        paths_to_check.append(Path(temp_dir) / "baseconfig.json")
+    selected_path = None
+    for path in paths_to_check:
+        if path.exists():
+            selected_path = path
+            break
+    if not selected_path:
+        print(f"Warning: baseconfig.json not found in {comfy_path} or temporary directory. Using default values.")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Warning: baseconfig.json not found in {comfy_path} or temporary directory. Using default values.\n")
+        return {"NUM_INSTANCES": 1, "GENERATIONS": 1}
+    try:
+        with open(selected_path, 'r', encoding='utf-8') as f:
+            baseconfig = json.load(f)
+        if not isinstance(baseconfig, dict):
+            raise ValueError(f"Error: baseconfig.json at {selected_path} does not contain a valid JSON object (expected a dictionary).")
+        config_values = {
+            "NUM_INSTANCES": baseconfig.get("NUM_INSTANCES", 1),
+            "GENERATIONS": baseconfig.get("GENERATIONS", 1)
+        }
+        print(f"Using values from baseconfig.json at {selected_path}: NUM_INSTANCES={config_values['NUM_INSTANCES']}, GENERATIONS={config_values['GENERATIONS']}")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Using values from baseconfig.json at {selected_path}: NUM_INSTANCES={config_values['NUM_INSTANCES']}, GENERATIONS={config_values['GENERATIONS']}\n")
+        return config_values
+    except Exception as e:
+        print(f"Warning: Failed to load baseconfig.json at {selected_path}: {e}. Using default values.")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Warning: Failed to load baseconfig.json at {selected_path}: {e}. Using default values.\n")
+        return {"NUM_INSTANCES": 1, "GENERATIONS": 1}
+
+def extract_zip(zip_path, extract_to, comfy_path, extract_minimal=False, log_file=None):
     os.makedirs(extract_to, exist_ok=True)
+    extract_to_path = Path(extract_to).resolve()
+    print(f"Extracting files to temporary directory: {extract_to_path}")
+    if log_file:
+        with open(log_file, 'a', encoding='utf-8') as f:
+            f.write(f"Extracting files to temporary directory: {extract_to_path}\n")
     with zipfile.ZipFile(zip_path, 'r') as zipf:
+        json_files = [f for f in zipf.namelist() if f.lower().endswith('.json')]
+        if not json_files:
+            raise FileNotFoundError(f"No JSON files found in {zip_path}")
+        # Prioritize workflow.json if present
+        target_file = next((f for f in json_files if f.lower().endswith('workflow.json')), None)
+        if not target_file:
+            raise FileNotFoundError(f"No workflow.json found in {zip_path}")
         if extract_minimal:
-            json_files = [f for f in zipf.namelist() if f.lower().endswith('.json')]
-            for file_name in json_files:
-                zipf.extract(file_name, extract_to)
-                print(f"Extracted {file_name} to: {extract_to}")
+            # Extract all .json files when --extract_minimal is used
+            for json_file in json_files:
+                zipf.extract(json_file, extract_to)
+                print(f"Extracted file: {Path(json_file).name}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Extracted file: {Path(json_file).name} to {extract_to}\n")
         else:
-            zipf.extractall(extract_to)
-            print(f"Extracted all files to: {extract_to}")
-    return extract_to
+            # Extract all files
+            for file_name in zipf.namelist():
+                zipf.extract(file_name, extract_to)
+                print(f"Extracted file: {Path(file_name).name}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Extracted file: {Path(file_name).name} to {extract_to}\n")
+        # Copy extracted .json files to ComfyUI/user/default/workflows/<zip_basename>
+        zip_basename = Path(zip_path).stem
+        workflow_dir = comfy_path / "user" / "default" / "workflows" / zip_basename
+        os.makedirs(workflow_dir, exist_ok=True)
+        for json_file in json_files:
+            src_path = Path(extract_to) / json_file
+            if src_path.exists():  # Only copy files that were extracted
+                dest_path = workflow_dir / Path(json_file).name
+                shutil.copy2(src_path, dest_path)
+                print(f"Saving workflow to: {dest_path}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"Saving workflow to: {dest_path}\n")
+        # Copy subfolders from extracted ComfyUI/ to local comfy_path
+        extracted_comfy_dir = Path(extract_to) / "ComfyUI"
+        if extracted_comfy_dir.exists() and extracted_comfy_dir.is_dir() and not extract_minimal:
+            for subfolder in extracted_comfy_dir.iterdir():
+                if subfolder.is_dir():
+                    folder_name = subfolder.name
+                    dest_folder = comfy_path / folder_name
+                    print(f"Begin folder copy: {folder_name}")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Begin folder copy: {folder_name}\n")
+                    shutil.copytree(subfolder, dest_folder, dirs_exist_ok=True)
+                    print(f"Copied folder {folder_name} to {dest_folder}")
+                    if log_file:
+                        with open(log_file, 'a', encoding='utf-8') as f:
+                            f.write(f"Copied folder {folder_name} to {dest_folder}\n")
+        return Path(extract_to) / target_file
 
 def run_python_script(script_path, cwd):
     if script_path.exists():
@@ -198,7 +385,7 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
                 match = pattern.search(line)
                 if match:
                     exec_time = float(match.group(1))
-                    if exec_time > 1.0: # Ignore invalid times
+                    if exec_time > 1.0:  # Ignore invalid times
                         print("\n")
                         if log_file:
                             with open(log_file, 'a', encoding='utf-8') as f:
@@ -217,20 +404,20 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
                     f.write(progress_buffer[-1] + '\n')
 
 def main():
-    # Force tqdm to use ASCII characters
-    # os.environ['TQDM_ASCII'] = '1' # Temporarily commented to test impact
     # Set console encoding to UTF-8
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
     parser = argparse.ArgumentParser(description="Run multiple ComfyUI instances for simultaneous image generations.")
     parser.add_argument("-n", "--num_instances", type=int, default=1, help="Number of simultaneous ComfyUI instances.")
     parser.add_argument("-c", "--comfy_path", required=True, help="Path to the ComfyUI directory.")
-    parser.add_argument("-w", "--workflow_path", required=True, help="Path to the JSON workflow file or ZIP file.")
+    parser.add_argument("-w", "--workflow_path", required=True, help="Path to the JSON workflow file, ZIP file, or directory containing workflow.json.")
     parser.add_argument("-g", "--generations", type=int, default=1, help="Number of generations per instance.")
-    parser.add_argument("-e", "--extract_minimal", action="store_true", help="Extract only .json files from ZIP.")
-    parser.add_argument("-r", "--run_default", action="store_true", help="Use default recipe (baseconfig.json)")
+    parser.add_argument("-e", "--extract_minimal", action="store_true", help="Extract only JSON files from ZIP.")
+    parser.add_argument("-r", "--run_default", action="store_true", help="Load default values for num_instances and generations from baseconfig.json if not provided.")
+    parser.add_argument("-o", "--override", type=str, help="Path to JSON file with override parameters.")
     parser.add_argument("-l", "--log", nargs='?', const=True, default=False, help="Log console output to a file. If no path is provided, use workflow basename + timestamp (yymmdd_epochtime.txt). If a path is provided, use it as is (if file) or append timestamp (if directory).")
-    parser.add_argument("--extra_args", nargs='*', default=[], help="Additional arguments to pass to main.py (e.g., --cpu, --num_gpus 2).")
+    parser.add_argument("-t", "--temp_path", type=str, help="Path to parent directory for temporary folder (defaults to ComfyUI/temp).")
+    parser.add_argument("--extra_args", nargs=argparse.REMAINDER, help="Additional arguments to pass to main.py (e.g., --cuda-device 1).")
     args = parser.parse_args()
     # Validate arguments
     if args.num_instances < 1:
@@ -239,23 +426,8 @@ def main():
     if args.generations < 1:
         print("Error: --generations must be at least 1.")
         sys.exit(1)
-    # Validate extra_args
-    extra_args = []
-    i = 0
-    while i < len(args.extra_args):
-        arg = args.extra_args[i]
-        if not arg.startswith('--'):
-            print(f"Error: Invalid extra argument '{arg}'. All extra arguments must start with '--'.")
-            sys.exit(1)
-        if i + 1 < len(args.extra_args) and not args.extra_args[i + 1].startswith('--'):
-            # Flag with value
-            extra_args.append(arg)
-            extra_args.append(args.extra_args[i + 1])
-            i += 2
-        else:
-            # Standalone flag
-            extra_args.append(arg)
-            i += 1
+    # Handle extra_args
+    extra_args = args.extra_args if args.extra_args else []
     # Handle logging
     log_file = None
     if args.log is not False:
@@ -268,219 +440,63 @@ def main():
             # User provided a path
             log_path = Path(args.log).resolve()
             if log_path.is_dir():
-                # If it's a directory, append default filename
                 log_file = log_path / f"{workflow_basename}_{timestamp}.txt"
-            elif log_path.parent.exists():
-                # If it's a file path and parent directory exists, use as is
-                log_file = log_path
             else:
-                print(f"Error: Invalid log path or directory does not exist: {log_path}")
-                sys.exit(1)
-        # Ensure log file directory exists
-        log_file.parent.mkdir(parents=True, exist_ok=True)
-        print(f"Logging output to: {log_file}")
-    comfy_path = Path(args.comfy_path).resolve()
-    if not (comfy_path / "main.py").exists():
-        print(f"Error: main.py not found in the provided ComfyUI path.")
+                log_file = log_path
+        print(f"Logging to: {log_file}")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(f"Error: main.py not found in the provided ComfyUI path.\n")
-        sys.exit(1)
-    # Handle workflow path
-    workflow_path = Path(args.workflow_path).resolve()
-    main_workflow = None
-    warmup_workflow = None
+                f.write(f"Starting run at {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+    # Initialize variables
     temp_dir = None
-    processes = []
-    output_queues = []
-    capture_events = []
     print_lock = Lock()
-    # Initialize default values
-    num_instances = args.num_instances
-    generations = args.generations
-    # Check for --run_default flag and load JSON file
-    if args.run_default:
-        config_filename = "baseconfig.json"
-        config_path = None
-        if workflow_path.suffix.lower() == '.zip':
-            # Create temp directory with ZIP basename
-            zip_basename = workflow_path.stem
-            temp_dir = comfy_path / "temp" / zip_basename
-            print(f"Extracting ZIP file: {workflow_path} to {temp_dir}")
-            if log_file:
-                with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
-            # Extract ZIP to temp directory
-            extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
-            config_path = temp_dir / config_filename
-        elif workflow_path.suffix.lower() == '.json':
-            config_path = workflow_path.parent / config_filename
-        if config_path and config_path.exists():
-            try:
-                with open(config_path, 'r', encoding='utf-8') as f:
-                    config = json.load(f)
-                num_instances = config.get("NUM_INSTANCES", args.num_instances)
-                generations = config.get("GENERATIONS", args.generations)
-                print(f"Loaded config from {config_path}: num_instances={num_instances}, generations={generations}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Loaded config from {config_path}: num_instances={num_instances}, generations={generations}\n")
-            except json.JSONDecodeError as e:
-                print(f"Error: {config_path} is not a valid JSON file.")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Error: {config_path} is not a valid JSON file.\n")
-                raise e
-            except Exception as e:
-                print(f"Error reading {config_path}: {e}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Error reading {config_path}: {e}\n")
-                raise
-        else:
-            print(f"Warning: --run_default was specified, but {config_filename} not found in {config_path if config_path else 'workflow directory'}.")
-            if log_file:
-                with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write(f"Warning: --run_default was specified, but {config_filename} not found in {config_path if config_path else 'workflow directory'}.\n")
+    comfy_path = Path(args.comfy_path).resolve()
+    workflow_path = Path(args.workflow_path).resolve()
+    processes = []  # Initialize early to avoid UnboundLocalError
+    created_temp_dir = False  # Track if we created the unique temp dir
     try:
-        if workflow_path.suffix.lower() == '.zip':
-            # Temp directory is already created if run_default was processed
-            if not temp_dir:
-                zip_basename = workflow_path.stem
-                temp_dir = comfy_path / "temp" / zip_basename
-                print(f"Extracting ZIP file: {workflow_path} to {temp_dir}")
+        # Set default temp_dir to comfy_path/temp/<unique>
+        temp_base = Path(args.temp_path).resolve() if args.temp_path else comfy_path / "temp"
+        temp_dir = temp_base / f"temp_{uuid.uuid4().hex}"
+        os.makedirs(temp_dir, exist_ok=True)
+        created_temp_dir = True  # We created the unique temp dir
+        # Handle ZIP, JSON, or directory for workflow
+        if workflow_path.is_dir():
+            workflow_path = workflow_path / "workflow.json"
+            if not workflow_path.exists():
+                print(f"Error: workflow.json not found in directory {args.workflow_path}")
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Extracting ZIP file: {workflow_path} to {temp_dir}\n")
-                extract_zip(workflow_path, temp_dir, extract_minimal=args.extract_minimal)
-            if temp_dir.exists():
-                save_workflow_dir = comfy_path / 'user/default/workflows' / zip_basename
-                if not save_workflow_dir.exists():
-                    save_workflow_dir.mkdir(parents=True, exist_ok=True)
-                print(f"Saving workflow to: {save_workflow_dir}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Saving workflow to: {save_workflow_dir}\n")
-                # Copy only .json files
-                for json_file in temp_dir.glob("*.json"):
-                    shutil.copy2(json_file, save_workflow_dir)
-                print(f"Saved workflow to: {save_workflow_dir}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Saved workflow to: {save_workflow_dir}\n")
-            # Run pre.py if it exists
-            pre_script_path = temp_dir / "pre.py"
-            if pre_script_path.exists():
-                print(f"Running {pre_script_path}...")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Running {pre_script_path}...\n")
-                run_python_script(pre_script_path, temp_dir)
-                print(f"Successfully ran {pre_script_path}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Successfully ran {pre_script_path}\n")
-            # Copy folders from extracted ComfyUI folder (only if not minimal extraction)
-            if not args.extract_minimal:
-                comfyui_extracted = temp_dir / "ComfyUI"
-                if comfyui_extracted.exists() and comfyui_extracted.is_dir():
-                    for item in comfyui_extracted.iterdir():
-                        if item.is_dir():
-                            print(f"Begin folder copy: {item.name} ")
-                            if log_file:
-                                with open(log_file, 'a', encoding='utf-8') as f:
-                                    f.write(f"Begin folder copy: {item.name}\n")
-                            target_path = comfy_path / item.name
-                            shutil.copytree(item, target_path, dirs_exist_ok=True)
-                            print(f"Copied folder {item.name} to: {target_path}")
-                            if log_file:
-                                with open(log_file, 'a', encoding='utf-8') as f:
-                                    f.write(f"Copied folder {item.name} to: {target_path}\n")
-                    # Check for custom_nodes in extracted ComfyUI and install requirements
-                    custom_nodes_extracted = comfyui_extracted / "custom_nodes"
-                    if custom_nodes_extracted.exists() and custom_nodes_extracted.is_dir():
-                        for node_folder in custom_nodes_extracted.iterdir():
-                            if node_folder.is_dir():
-                                requirements_path = node_folder / "requirements.txt"
-                                if requirements_path.exists():
-                                    print(f"Installing requirements for {node_folder.name}...")
-                                    if log_file:
-                                        with open(log_file, 'a', encoding='utf-8') as f:
-                                            f.write(f"Installing requirements for {node_folder.name}...\n")
-                                    try:
-                                        subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)], cwd=node_folder)
-                                        print(f"Installed requirements for {node_folder.name}")
-                                        if log_file:
-                                            with open(log_file, 'a', encoding='utf-8') as f:
-                                                f.write(f"Installed requirements for {node_folder.name}\n")
-                                    except subprocess.CalledProcessError as e:
-                                        print(f"Error installing requirements for {node_folder.name}: {e}. Continuing...")
-                                        if log_file:
-                                            with open(log_file, 'a', encoding='utf-8') as f:
-                                                f.write(f"Error installing requirements for {node_folder.name}: {e}. Continuing...\n")
-            # Run post.py if it exists
-            post_script_path = temp_dir / "post.py"
-            if post_script_path.exists():
-                print(f"Running {post_script_path}...")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Running {post_script_path}...\n")
-                run_python_script(post_script_path, temp_dir)
-                print(f"Successfully ran {post_script_path}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Successfully ran {post_script_path}\n")
-            # Warn if ComfyUI folder is missing in minimal extraction
-            if args.extract_minimal and not (temp_dir / "ComfyUI").exists():
-                print("Warning: --extract_minimal was specified, but ComfyUI folder is missing. Ensure workflow.json is at the root of the ZIP.")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write("Warning: --extract_minimal was specified, but ComfyUI folder is missing. Ensure workflow.json is at the root of the ZIP.\n")
-            # Load main workflow
-            main_workflow_path = temp_dir / "workflow.json"
-            if not main_workflow_path.exists():
-                print(f"Error: workflow.json not found in extracted ZIP.")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Error: workflow.json not found in extracted ZIP.\n")
+                        f.write(f"Error: workflow.json not found in directory {args.workflow_path}\n")
                 sys.exit(1)
-            main_workflow = load_workflow(main_workflow_path)
-            # Load warmup workflow if it exists
-            warmup_workflow_path = temp_dir / "warmup.json"
-            if warmup_workflow_path.exists():
-                print(f"Using warmup.json for warmup: {warmup_workflow_path}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Using warmup.json for warmup: {warmup_workflow_path}\n")
-                warmup_workflow = load_workflow(warmup_workflow_path)
-            else:
-                print(f"warmup.json not found in {temp_dir}, using workflow.json for warmup")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"warmup.json not found in {temp_dir}, using workflow.json for warmup\n")
-                warmup_workflow = main_workflow
-        elif workflow_path.suffix.lower() == '.json':
-            main_workflow = load_workflow(workflow_path)
-            # Check for warmup.json in the same directory as the provided JSON
-            warmup_workflow_path = workflow_path.parent / "warmup.json"
-            if warmup_workflow_path.exists():
-                print(f"Using warmup.json for warmup: {warmup_workflow_path}")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"Using warmup.json for warmup: {warmup_workflow_path}\n")
-                warmup_workflow = load_workflow(warmup_workflow_path)
-            else:
-                print(f"warmup.json not found in {workflow_path.parent}, using {workflow_path.name} for warmup")
-                if log_file:
-                    with open(log_file, 'a', encoding='utf-8') as f:
-                        f.write(f"warmup.json not found in {workflow_path.parent}, using {workflow_path.name} for warmup\n")
-                warmup_workflow = main_workflow
-        else:
-            print("Error: --workflow_path must be a .json or .zip file.")
+        elif workflow_path.suffix.lower() == '.zip':
+            workflow_path = extract_zip(workflow_path, temp_dir, comfy_path, args.extract_minimal, log_file)
+        elif workflow_path.suffix.lower() != '.json':
+            print(f"Error: --workflow_path must be a .json file, a .zip file, or a directory containing workflow.json.")
             if log_file:
                 with open(log_file, 'a', encoding='utf-8') as f:
-                    f.write("Error: --workflow_path must be a .json or .zip file.\n")
+                    f.write("Error: --workflow_path must be a .json file, a .zip file, or a directory containing workflow.json.\n")
             sys.exit(1)
+        print(f"Using workflow: {workflow_path}")
+        if log_file:
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(f"Using workflow: {workflow_path}\n")
+        # Handle -r flag: Load defaults from baseconfig.json if not provided
+        if args.run_default:
+            baseconfig = load_baseconfig(comfy_path, temp_dir, log_file)
+            if args.num_instances == 1:  # Only override if default value
+                args.num_instances = baseconfig["NUM_INSTANCES"]
+            if args.generations == 1:  # Only override if default value
+                args.generations = baseconfig["GENERATIONS"]
+        num_instances = args.num_instances
+        generations = args.generations
+        # Load and validate workflow
+        main_workflow = load_workflow(workflow_path)
+        # Apply overrides if provided
+        main_workflow, main_applied_overrides = apply_overrides(main_workflow, args.override, log_file)
+        # Use main workflow for warmup
+        warmup_workflow = main_workflow
+        warmup_applied_overrides = main_applied_overrides
         processes = []
         ports = []
         base_port = 8188
@@ -494,7 +510,7 @@ def main():
             port = base_port + i
             ports.append(port)
             command = ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"]
-            command.extend(extra_args)  # Append extra arguments
+            command.extend(extra_args)
             proc = subprocess.Popen(
                 command,
                 cwd=comfy_path,
@@ -564,7 +580,7 @@ def main():
                     print(f"Completed generation {gen+1} on instance {idx+1}")
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
-                            f.write(f"Completed generation {gen+1} on instance {idx+1}\n\n")
+                            f.write(f"Completed generation {gen+1} on instance {idx+1}\n")
             except Exception as e:
                 error_msg = f"Error during {'warmup' if is_warmup else f'generation {gen+1}'} on instance {idx+1}: {e}"
                 if "ZeroDivisionError" in str(e) or "integer division or modulo by zero" in str(e):
@@ -644,12 +660,21 @@ def main():
         else:
             images_per_minute = 0
             avg_time_per_image = 0
+        # Prepare results summary
         print('####_RESULTS_SUMMARY_####\n')
         print(f"Total time to generate {total_images} images: {total_time:.2f} seconds")
         print(f"Number of images per minute: {images_per_minute:.2f}")
         print(f"Average time (secs) per image: {avg_time_per_image:.2f}")
         print(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds")
         print(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds")
+        # Add override summary
+        if main_applied_overrides:
+            print("\nApplied Overrides:")
+            print("  Main Workflow Overrides:")
+            for override in main_applied_overrides:
+                print(f"    - {override['key']}: Set {override['item']} to {override['value']} in nodes {override['nodes']}")
+        else:
+            print("\nNo overrides applied.")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write('####_RESULTS_SUMMARY_####\n')
@@ -658,6 +683,13 @@ def main():
                 f.write(f"Average time (secs) per image: {avg_time_per_image:.2f}\n")
                 f.write(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds\n")
                 f.write(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds\n")
+                if main_applied_overrides:
+                    f.write("\nApplied Overrides:\n")
+                    f.write("  Main Workflow Overrides:\n")
+                    for override in main_applied_overrides:
+                        f.write(f"    - {override['key']}: Set {override['item']} to {override['value']} in nodes {override['nodes']}\n")
+                else:
+                    f.write("\nNo overrides applied.\n")
     except KeyboardInterrupt:
         print("Cleaning up after user interrupt...")
         if log_file:
@@ -685,6 +717,14 @@ def main():
         print(f"Average time (secs) per image: {avg_time_per_image:.2f}")
         print(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds")
         print(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds")
+        # Add override summary for partial metrics
+        if main_applied_overrides:
+            print("\nApplied Overrides:")
+            print("  Main Workflow Overrides:")
+            for override in main_applied_overrides:
+                print(f"    - {override['key']}: Set {override['item']} to {override['value']} in nodes {override['nodes']}")
+        else:
+            print("\nNo overrides applied.")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(f"Partial metrics for {total_images} images:\n")
@@ -693,6 +733,13 @@ def main():
                 f.write(f"Average time (secs) per image: {avg_time_per_image:.2f}\n")
                 f.write(f"Total Execution Time (main generations): {total_execution_time:.2f} seconds\n")
                 f.write(f"Average Execution Time Per Image (main generations): {avg_execution_time:.2f} seconds\n")
+                if main_applied_overrides:
+                    f.write("\nApplied Overrides:\n")
+                    f.write("  Main Workflow Overrides:\n")
+                    for override in main_applied_overrides:
+                        f.write(f"    - {override['key']}: Set {override['item']} to {override['value']} in nodes {override['nodes']}\n")
+                else:
+                    f.write("\nNo overrides applied.\n")
     finally:
         # Clean up: Terminate processes and remove temp directory
         for i, proc in enumerate(processes):
@@ -715,7 +762,7 @@ def main():
                     proc.stderr = devnull
                     proc.terminate()
                     proc.wait(timeout=2)
-        if temp_dir and temp_dir.exists():
+        if temp_dir and temp_dir.exists() and created_temp_dir:
             shutil.rmtree(temp_dir, ignore_errors=True)
             print(f"Removed temporary directory: {temp_dir}")
             if log_file:
@@ -724,7 +771,7 @@ def main():
         print("Done.")
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
-                print(f"Logfile written to: {log_file}\n")
+                f.write(f"Logfile written to: {log_file}\n")
 
 if __name__ == "__main__":
     main()
