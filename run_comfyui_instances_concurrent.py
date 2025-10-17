@@ -246,10 +246,11 @@ def extract_zip(zip_path, extract_to, comfy_path, extract_minimal=False, log_fil
         json_files = [f for f in zipf.namelist() if f.lower().endswith('.json')]
         if not json_files:
             raise FileNotFoundError(f"No JSON files found in {zip_path}")
-        # Prioritize workflow.json if present
-        target_file = next((f for f in json_files if f.lower().endswith('workflow.json')), None)
+        # Prioritize workflow.json at the root of the ZIP
+        root_json_files = [f for f in json_files if not (os.sep in f or '/' in f)]
+        target_file = next((f for f in root_json_files if f.lower() == 'workflow.json'), None)
         if not target_file:
-            raise FileNotFoundError(f"No workflow.json found in {zip_path}")
+            raise FileNotFoundError(f"No workflow.json found at the root of {zip_path}")
         if extract_minimal:
             # Extract all .json files when --extract_minimal is used
             for json_file in json_files:
@@ -266,11 +267,14 @@ def extract_zip(zip_path, extract_to, comfy_path, extract_minimal=False, log_fil
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"Extracted file: {Path(file_name).name} to {extract_to}\n")
-        # Copy extracted .json files to ComfyUI/user/default/workflows/<zip_basename>
+        
+        # Copy only .json files at the root of the temporary directory to ComfyUI/user/default/workflows/<zip_basename>
         zip_basename = Path(zip_path).stem
         workflow_dir = comfy_path / "user" / "default" / "workflows" / zip_basename
         os.makedirs(workflow_dir, exist_ok=True)
-        for json_file in json_files:
+        # Filter json_files to only include files at the root (no directory separators)
+        root_json_files = [f for f in json_files if not (os.sep in f or '/' in f)]
+        for json_file in root_json_files:
             src_path = Path(extract_to) / json_file
             if src_path.exists():  # Only copy files that were extracted
                 dest_path = workflow_dir / Path(json_file).name
@@ -279,6 +283,42 @@ def extract_zip(zip_path, extract_to, comfy_path, extract_minimal=False, log_fil
                 if log_file:
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"Saving workflow to: {dest_path}\n")
+        # Run pre.py if it exists
+        pre_script_path = Path(extract_to) / "pre.py"
+        if pre_script_path.exists():
+            print(f"Running {pre_script_path}...")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Running {pre_script_path}...\n")
+            run_python_script(pre_script_path, extract_to)
+            print(f"Successfully ran {pre_script_path}")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Successfully ran {pre_script_path}\n")
+        # Check for ComfyUI/custom_nodes and install requirements.txt if present
+        custom_nodes_dir = Path(extract_to) / "ComfyUI" / "custom_nodes"
+        if custom_nodes_dir.exists() and custom_nodes_dir.is_dir():
+            for node_dir in custom_nodes_dir.iterdir():
+                if node_dir.is_dir():
+                    requirements_path = node_dir / "requirements.txt"
+                    if requirements_path.exists():
+                        node_name = node_dir.name
+                        print(f"Installing requirements for custom node {node_name}...")
+                        if log_file:
+                            with open(log_file, 'a', encoding='utf-8') as f:
+                                f.write(f"Installing requirements for custom node {node_name}...\n")
+                        try:
+                            subprocess.check_call([sys.executable, "-m", "pip", "install", "-r", str(requirements_path)], cwd=node_dir)
+                            print(f"Successfully installed requirements for custom node {node_name}")
+                            if log_file:
+                                with open(log_file, 'a', encoding='utf-8') as f:
+                                    f.write(f"Successfully installed requirements for custom node {node_name}\n")
+                        except subprocess.CalledProcessError as e:
+                            print(f"Failed to install requirements for custom node {node_name}: {e}")
+                            if log_file:
+                                with open(log_file, 'a', encoding='utf-8') as f:
+                                    f.write(f"Failed to install requirements for custom node {node_name}: {e}\n")
+                            raise
         # Copy subfolders from extracted ComfyUI/ to local comfy_path
         extracted_comfy_dir = Path(extract_to) / "ComfyUI"
         if extracted_comfy_dir.exists() and extracted_comfy_dir.is_dir() and not extract_minimal:
@@ -295,6 +335,18 @@ def extract_zip(zip_path, extract_to, comfy_path, extract_minimal=False, log_fil
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
                             f.write(f"Copied folder {folder_name} to {dest_folder}\n")
+        # Run post.py if it exists
+        post_script_path = Path(extract_to) / "post.py"
+        if post_script_path.exists():
+            print(f"Running {post_script_path}...")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Running {post_script_path}...\n")
+            run_python_script(post_script_path, extract_to)
+            print(f"Successfully ran {post_script_path}")
+            if log_file:
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(f"Successfully ran {post_script_path}\n")
         return Path(extract_to) / target_file
 
 def run_python_script(script_path, cwd):
@@ -566,10 +618,10 @@ def main():
                             f.write(f"Queued warmup on instance {idx+1} (prompt_id: {prompt_id})\n")
                 else:
                     capture_events[idx].set()
-                    print(f"Queued generation {gen+1} on instance {idx+1} (prompt_id: {prompt_id})")
+                    print(f"Queued generation {gen+1} of {generations} on instance {idx+1} (prompt_id: {prompt_id})")
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
-                            f.write(f"Queued generation {gen+1} on instance {idx+1} (prompt_id: {prompt_id})\n")
+                            f.write(f"Queued generation {gen+1} of {generations} on instance {idx+1} (prompt_id: {prompt_id})\n")
                 history = wait_for_completion(prompt_id, server_address)
                 if is_warmup:
                     print(f"Completed warmup on instance {idx+1}")
@@ -577,10 +629,10 @@ def main():
                         with open(log_file, 'a', encoding='utf-8') as f:
                             f.write(f"Completed warmup on instance {idx+1}\n")
                 else:
-                    print(f"Completed generation {gen+1} on instance {idx+1}")
+                    print(f"Completed generation {gen+1} of {generations} on instance {idx+1}")
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
-                            f.write(f"Completed generation {gen+1} on instance {idx+1}\n")
+                            f.write(f"Completed generation {gen+1} of {generations} on instance {idx+1}\n")
             except Exception as e:
                 error_msg = f"Error during {'warmup' if is_warmup else f'generation {gen+1}'} on instance {idx+1}: {e}"
                 if "ZeroDivisionError" in str(e) or "integer division or modulo by zero" in str(e):
