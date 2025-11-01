@@ -293,8 +293,8 @@ class WorkflowManager:
                 "_meta": {"title": "Benchmark Workflow"},
                 "inputs": {
                     "capture_benchmark": True,
-                    "outfile_postfix1": "",
-                    "outfile_postfix2": ""
+                    "file_prefix": "",
+                    "file_postfix": ""
                 }
             }
             self.log(f"Created new Benchmark Workflow node with ID: {benchmark_node_id}")
