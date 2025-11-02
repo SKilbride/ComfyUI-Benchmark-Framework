@@ -8,18 +8,22 @@ from pathlib import Path
 
 from requests import get
 
+# Custom ignore function to skip .git and anything inside it
+def ignore_git(directory, files):
+    """Ignore .git folders and their contents during copytree."""
+    ignored = []
+    for f in files:
+        if f == '.git' or f.startswith('.git'):
+            ignored.append(f)
+            continue
+        full_path = Path(directory) / f
+        if full_path.is_dir() and '.git' in full_path.parts:
+            ignored.append(f)
+    return ignored
+
 class PackageManager:
     def __init__(self, zip_path, comfy_path, temp_path=None, extract_minimal=False, log_file=None):
-        """
-        Initialize PackageManager with a ZIP file path and ComfyUI directory.
-
-        Args:
-            zip_path (Path): Path to the ZIP file containing workflow and related files.
-            comfy_path (Path): Path to the ComfyUI directory.
-            temp_path (Path, optional): Parent directory for temporary folder.
-            extract_minimal (bool): If True, extract only JSON files from ZIP.
-            log_file (Path, optional): Path to log file for logging operations.
-        """
+        """Initialize PackageManager with a ZIP file path and ComfyUI directory."""
         self.zip_path = Path(zip_path).resolve()
         self.comfy_path = Path(comfy_path).resolve()
         self.temp_path = Path(temp_path).resolve() if temp_path else self.comfy_path / "temp"
@@ -30,14 +34,12 @@ class PackageManager:
         self.package_name = self.zip_path.stem
 
     def log(self, message):
-        """Log a message to the console and optionally to a log file."""
         print(message)
         if self.log_file:
             with open(self.log_file, 'a', encoding='utf-8') as f:
                 f.write(message + '\n')
 
     def extract_zip(self):
-        """Extract the ZIP file and return the path to workflow.json."""
         self.temp_dir = self.temp_path / f"temp_{uuid.uuid4().hex}"
         os.makedirs(self.temp_dir, exist_ok=True)
         self.created_temp_dir = True
@@ -57,6 +59,9 @@ class PackageManager:
                 raise FileNotFoundError(error_msg)
 
             for file_name in (json_files if self.extract_minimal else zipf.namelist()):
+                if '.git' in file_name:
+                    self.log(f"DEBUG: Skipping .git path during extraction: {file_name}")
+                    continue
                 zipf.extract(file_name, self.temp_dir)
                 self.log(f"Extracted file: {Path(file_name).name}")
 
@@ -77,7 +82,6 @@ class PackageManager:
             return self.temp_dir / target_file
 
     def _run_script_if_exists(self, script_path):
-        """Run a Python script if it exists."""
         if script_path.exists():
             self.log(f"Running {script_path}...")
             try:
@@ -89,11 +93,15 @@ class PackageManager:
                 raise
 
     def _install_custom_nodes(self):
-        """Install requirements for custom nodes in the extracted ZIP."""
         custom_nodes_dir = self.temp_dir / "ComfyUI" / "custom_nodes"
         if custom_nodes_dir.exists() and custom_nodes_dir.is_dir():
             for node_dir in custom_nodes_dir.iterdir():
                 if node_dir.is_dir():
+                    self.log(f"DEBUG: Processing custom node: {node_dir}")
+                    if node_dir.name == '.git':
+                        self.log(f"Skipping .git folder in custom_nodes: {node_dir}")
+                        continue
+
                     requirements_path = node_dir / "requirements.txt"
                     if requirements_path.exists():
                         node_name = node_dir.name
@@ -105,18 +113,32 @@ class PackageManager:
                             error_msg = f"Failed to install requirements for custom node {node_name}: {e}"
                             self.log(error_msg)
                             raise
+
         if not self.extract_minimal:
             extracted_comfy_dir = self.temp_dir / "ComfyUI"
             if extracted_comfy_dir.exists() and extracted_comfy_dir.is_dir():
                 for subfolder in extracted_comfy_dir.iterdir():
                     if subfolder.is_dir():
+                        if subfolder.name == '.git':
+                            self.log(f"Skipping .git folder: {subfolder}")
+                            continue
                         dest_folder = self.comfy_path / subfolder.name
                         self.log(f"Begin folder copy: {subfolder.name}")
-                        shutil.copytree(subfolder, dest_folder, dirs_exist_ok=True)
-                        self.log(f"Copied folder {subfolder.name} to {dest_folder}")
+
+                        try:
+                            shutil.copytree(
+                                subfolder,
+                                dest_folder,
+                                dirs_exist_ok=True,
+                                ignore=ignore_git
+                            )
+                            self.log(f"Copied folder {subfolder.name} to {dest_folder}")
+                        except shutil.Error as e:
+                            self.log(f"Warning: Skipped problematic files while copying {subfolder.name}: {e}")
+                        except PermissionError as e:
+                            self.log(f"PermissionError while copying {subfolder.name}: {e}. Skipping .git or locked files.")
 
     def cleanup(self):
-        """Clean up temporary directory if it was created."""
         if self.temp_dir and self.temp_dir.exists() and self.created_temp_dir:
             shutil.rmtree(self.temp_dir, ignore_errors=True)
             self.log(f"Removed temporary directory: {self.temp_dir}")

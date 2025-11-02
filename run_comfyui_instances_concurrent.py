@@ -315,6 +315,10 @@ def main():
     package_manager = None
     extra_args = args.extra_args or []
 
+    # Initialize processes and ports BEFORE try block to avoid UnboundLocalError
+    processes = []
+    ports = []
+
     try:
         # Handle workflow
         if workflow_path.is_dir():
@@ -354,7 +358,6 @@ def main():
             if args.num_instances == 1: num_instances = bc["NUM_INSTANCES"]
             if args.generations == 1: generations = bc["GENERATIONS"]
 
-        processes, ports = [], []
         base_port = args.port
         output_queues = [Queue() for _ in range(num_instances)]
         capture_events = [Event() for _ in range(num_instances)]
@@ -402,7 +405,6 @@ def main():
                         workflow[bid] = {"class_type": "BenchmarkWorkflow", "_meta": {"title": "Benchmark Workflow"}, "inputs": {"capture_benchmark": True, "file_prefix": "", "file_postfix": ""}}
                     node = workflow[bid]
                     node["inputs"]["file_postfix"] = "_warmup_" if is_warmup else f"_RUN_{gen+1}.{idx+1}"
-                    
 
                 print(f"[{instance_id}] Queueing...")
                 resp = requests.post(f"http://{server_address}/prompt", json={"prompt": workflow, "client_id": client_id}, timeout=30)
@@ -476,19 +478,52 @@ def main():
         # METRICS
         total_time = time.time() - start_time
         total_images = num_instances * generations
-        exec_times = [q.get() for q in output_queues if not q.empty() for _ in range(q.qsize())]
+        exec_times = []
+        for q in output_queues:
+            while not q.empty():
+                exec_times.append(q.get())
         total_exec = sum(exec_times)
         avg_exec = total_exec / len(exec_times) if exec_times else 0
         ipm = total_images / (total_time / 60) if total_time > 0 else 0
         atpi = total_time / total_images if total_images > 0 else 0
 
+        # === CORRECT PACKAGE NAME (AFTER package_manager exists) ===
+        package_name = "N/A"
+        if package_manager and hasattr(package_manager, 'package_name'):
+            package_name = package_manager.package_name
+        elif args.workflow_path:
+            # Fallback: use stem of original path
+            original_path = Path(args.workflow_path)
+            package_name = original_path.stem
+            # If it was a ZIP, try to get the inner folder name
+            if original_path.suffix.lower() == '.zip' and package_manager and package_manager.temp_dir:
+                inner_dir = package_manager.temp_dir
+                if inner_dir.exists():
+                    package_name = inner_dir.name
+        print("\n")# ==================================================
+        print('#########################')
         print('####_RESULTS_SUMMARY_####')
-        print(f"Total time: {total_time:.2f}s | Images: {total_images} | IPM (Images Per Minute): {ipm:.2f} | Avg/sec Per Image: {atpi:.2f}")
-        print(f"Total exec: {total_exec:.2f}s | Avg exec: {avg_exec:.2f}s")
+        print(f"Benchmarking Package: {package_name}")
+        if num_instances > 1:
+            print(f"Number of Concurrent ComfyUI Instances: {num_instances}")
+            print(f"Number of Image Generations per Instance: {generations}")
+        else:
+            print(f"Number of Image Generations: {generations}")
+        print(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | IPM (Images/Minute): {ipm:.2f} ")
+        print('#########################')
+        print("\n")
+
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write('####_RESULTS_SUMMARY_####\n')
-                f.write(f"Total: {total_time:.2f}s, IPM: {ipm:.2f}, Avg: {atpi:.2f}s\n")
+                f.write(f"Benchmarking Package: {package_name}\n")
+                if num_instances > 1:
+                    f.write(f"Number of Concurrent ComfyUI Instances: {num_instances}\n")
+                    f.write(f"Number of Image Generations per Instance: {generations}\n")
+                else:
+                    f.write(f"Number of Image Generations: {generations}\n")
+                f.write(f"Total time: {total_time:.2f}s | Images: {total_images} | IPM: {ipm:.2f} | Avg/sec per Image: {atpi:.2f}\n")
+                
 
     except KeyboardInterrupt:
         print("User interrupt.")
