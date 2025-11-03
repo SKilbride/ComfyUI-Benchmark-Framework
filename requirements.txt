@@ -1,1 +1,7 @@
 requests
+PySide6
+qtpy
+pyyaml
+
+
+
