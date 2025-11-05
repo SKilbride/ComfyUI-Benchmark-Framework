@@ -17,6 +17,7 @@ from datetime import datetime
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.workflow_manager import WorkflowManager
 from core.package_manager import PackageManager
+from core.gui import run_gui
 
 class YamlObject:
     def __init__(self, yaml_path):
@@ -279,8 +280,8 @@ def main():
 
     parser = argparse.ArgumentParser(description="Run multiple ComfyUI instances concurrently.")
     parser.add_argument("-n", "--num_instances", type=int, default=1)
-    parser.add_argument("-c", "--comfy_path", required=True)
-    parser.add_argument("-w", "--workflow_path", required=True)
+    parser.add_argument("-c", "--comfy_path", type=str, help="Path to ComfyUI folder")
+    parser.add_argument("-w", "--workflow_path", type=str, help="Path to workflow ZIP or folder")
     parser.add_argument("-g", "--generations", type=int, default=1)
     parser.add_argument("-e", "--extract_minimal", action="store_true")
     parser.add_argument("-r", "--run_default", action="store_true")
@@ -292,11 +293,45 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true")
     parser.add_argument("--debug-warmup", action="store_true", help="Enable verbose debug logging ONLY during warmup")
     parser.add_argument("--extra_args", nargs=argparse.REMAINDER)
+    parser.add_argument("--gui", action="store_true", help="Show a Qt-based GUI to pick -c and -w")
     args = parser.parse_args()
 
-    if args.num_instances < 1 or args.generations < 1 or not (1024 <= args.port <= 65535):
-        print("Invalid arguments.")
-        sys.exit(1)
+    # ------------------------------------------------------------------
+    # GUI MODE
+    # ------------------------------------------------------------------
+    if args.gui:
+        # Pre-fill if the user already gave -c / -w on the CLI
+        comfy_path_arg = Path(args.comfy_path).resolve() if args.comfy_path else None
+        workflow_path_arg = Path(args.workflow_path).resolve() if args.workflow_path else None
+
+        try:
+            gui_result = run_gui(
+                comfy_path=comfy_path_arg,
+                workflow_path=workflow_path_arg,
+                extract_minimal=args.extract_minimal,
+                port=args.port,
+                generations=args.generations,
+                num_instances=args.num_instances,
+                run_default=args.run_default
+            )
+        except SystemExit:
+            sys.exit(0)
+
+        # Override CLI arguments with GUI selections
+        args.comfy_path = str(gui_result['comfy_path'])
+        args.workflow_path = str(gui_result['workflow_path'])
+        args.extract_minimal = gui_result['extract_minimal']
+        args.port = gui_result['port']
+        args.generations = gui_result['generations']
+        args.num_instances = gui_result['num_instances']
+        args.run_default = gui_result['run_default']
+
+    else:
+        # CLI mode: -c and -w are REQUIRED
+        if not args.comfy_path:
+            parser.error("--comfy_path (-c) is required when not using --gui.")
+        if not args.workflow_path:
+            parser.error("--workflow_path (-w) is required when not using --gui.")
 
     log_file = None
     if args.log is not False:
@@ -416,7 +451,7 @@ def main():
                 if not is_warmup:
                     capture_events[idx].set()
 
-                history = wait_for_completion(prompt_id, server_address, timeout=900 if not is_warmup else 600, instance_id=instance_id, debug=debug)
+                history = wait_for_completion(prompt_id, server_address, timeout=4000 if not is_warmup else 3600, instance_id=instance_id, debug=debug)
 
                 print(f"[{instance_id}] {'Warmup' if is_warmup else f'Gen {gen+1}'} completed")
             except Exception as e:
