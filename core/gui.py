@@ -1,16 +1,19 @@
 # core/gui.py
 import sys
+import os
 from pathlib import Path
 
 try:
     from qtpy.QtWidgets import (
-        QApplication, QWidget, QVBoxLayout, QHBoxLayout,
-        QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox, QCheckBox, QSpinBox
+        QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
+        QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox,
+        QCheckBox, QSpinBox, QFormLayout
     )
     from qtpy.QtCore import Qt
     QT_AVAILABLE = True
 except Exception:  # pragma: no cover
     QT_AVAILABLE = False
+
 
 def run_gui(comfy_path: Path | None = None,
             workflow_path: Path | None = None,
@@ -18,22 +21,19 @@ def run_gui(comfy_path: Path | None = None,
             port: int = 8000,
             generations: int = 10,
             num_instances: int = 1,
-            run_default: bool = False) -> dict:
-    """
-    Show a Qt dialog to pick options.
-
-    Returns
-    -------
-    dict with keys: 'comfy_path', 'workflow_path', 'extract_minimal', 'port', 'generations', 'num_instances', 'run_default'
-    """
-    if not QT_AVAILABLE:  # pragma: no cover
+            run_default: bool = False,
+            extra_args: list | None = None,
+            debug_warmup: bool = False,
+            no_cleanup: bool = False,
+            use_main_workflow_only: bool = False) -> dict:
+    if not QT_AVAILABLE:
         print("Qt bindings not found – falling back to CLI mode.")
         sys.exit(0)
 
     app = QApplication(sys.argv)
     win = QWidget()
     win.setWindowTitle("ComfyUI Benchmark – Select Options")
-    win.setFixedSize(620, 300)
+    win.setFixedSize(660, 380)
 
     layout = QVBoxLayout()
     win.setLayout(layout)
@@ -47,10 +47,8 @@ def run_gui(comfy_path: Path | None = None,
     comfy_row.addWidget(comfy_edit)
 
     def browse_comfy():
-        folder = QFileDialog.getExistingDirectory(
-            win,
-            "Select ComfyUI folder",
-            comfy_edit.text() or str(Path.home()))
+        start_dir = comfy_edit.text().strip() or os.getcwd()
+        folder = QFileDialog.getExistingDirectory(win, "Select ComfyUI folder", start_dir)
         if folder:
             comfy_edit.setText(folder)
 
@@ -60,7 +58,7 @@ def run_gui(comfy_path: Path | None = None,
     layout.addLayout(comfy_row)
 
     # ------------------------------------------------------------------
-    # Workflow (ZIP or JSON)
+    # Workflow
     # ------------------------------------------------------------------
     workflow_row = QHBoxLayout()
     workflow_row.addWidget(QLabel("Workflow (-w) – ZIP or .json file:"))
@@ -72,11 +70,11 @@ def run_gui(comfy_path: Path | None = None,
     workflow_row.addWidget(use_folder_check)
 
     def browse_workflow():
+        start_dir = workflow_edit.text().strip() or os.getcwd()
         file, _ = QFileDialog.getOpenFileName(
-            win,
-            "Select workflow ZIP or .json",
-            workflow_edit.text() or str(Path.home()),
-            "Workflow files (*.zip *.json);;All files (*)")
+            win, "Select workflow ZIP or .json", start_dir,
+            "Workflow files (*.zip *.json);;All files (*)"
+        )
         if file:
             workflow_edit.setText(file)
 
@@ -86,14 +84,14 @@ def run_gui(comfy_path: Path | None = None,
     layout.addLayout(workflow_row)
 
     # ------------------------------------------------------------------
-    # Minimal Extraction checkbox
+    # Minimal Extraction
     # ------------------------------------------------------------------
     minimal_check = QCheckBox("Minimal Extraction (Models/Nodes must be previously installed) (-e)")
     minimal_check.setChecked(extract_minimal)
     layout.addWidget(minimal_check)
 
     # ------------------------------------------------------------------
-    # Port spinbox
+    # Port
     # ------------------------------------------------------------------
     port_row = QHBoxLayout()
     port_row.addWidget(QLabel("Port (-p):"))
@@ -105,35 +103,80 @@ def run_gui(comfy_path: Path | None = None,
     layout.addLayout(port_row)
 
     # ------------------------------------------------------------------
-    # Generations and Instances spinboxes
+    # Generations
     # ------------------------------------------------------------------
-    spins_row = QHBoxLayout()
-    spins_row.addWidget(QLabel("Number of Image Generations (-g):"))
+    gen_row = QHBoxLayout()
+    gen_row.addWidget(QLabel("Number of Image Generations (-g):"))
     generations_spin = QSpinBox()
     generations_spin.setRange(1, 1000)
     generations_spin.setValue(generations)
-    spins_row.addWidget(generations_spin)
-
-    spins_row.addWidget(QLabel("Number of concurrent sessions (-n):"))
-    num_instances_spin = QSpinBox()
-    num_instances_spin.setRange(1, 100)
-    num_instances_spin.setValue(num_instances)
-    spins_row.addWidget(num_instances_spin)
-    layout.addLayout(spins_row)
+    gen_row.addWidget(generations_spin)
+    gen_row.addStretch()
+    layout.addLayout(gen_row)
 
     # ------------------------------------------------------------------
-    # Use Package Defaults checkbox
+    # Use Package Defaults
     # ------------------------------------------------------------------
     default_check = QCheckBox("Use Package Defaults (-r)")
     default_check.setChecked(run_default)
 
-    def toggle_spins(checked: bool):
+    def toggle_gen_spin(checked: bool):
         generations_spin.setEnabled(not checked)
-        num_instances_spin.setEnabled(not checked)
 
-    default_check.toggled.connect(toggle_spins)
-    toggle_spins(run_default)  # Initial state
+    default_check.toggled.connect(toggle_gen_spin)
+    toggle_gen_spin(run_default)
     layout.addWidget(default_check)
+
+    # ------------------------------------------------------------------
+    # ADVANCED SECTION (COLLAPSIBLE & HIDDEN BY DEFAULT)
+    # ------------------------------------------------------------------
+    advanced_group = QGroupBox("Advanced Options")
+    advanced_group.setCheckable(True)
+    advanced_group.setChecked(False)  # Start collapsed
+    advanced_group.setFlat(True)
+
+    # Container for advanced widgets
+    advanced_container = QWidget()
+    advanced_layout = QFormLayout()
+    advanced_container.setLayout(advanced_layout)
+
+    # --- Advanced Options ---
+    instances_spin = QSpinBox()
+    instances_spin.setRange(1, 100)
+    instances_spin.setValue(num_instances)
+    advanced_layout.addRow("Concurrent Sessions (-n):", instances_spin)
+
+    extra_args_edit = QLineEdit(" ".join(extra_args) if extra_args else "")
+    extra_args_edit.setPlaceholderText("--lowvram --force-cpu etc.")
+    advanced_layout.addRow("Extra Args:", extra_args_edit)
+
+    debug_check = QCheckBox("Debug Warmup (--debug-warmup)")
+    debug_check.setChecked(debug_warmup)
+    advanced_layout.addRow(debug_check)
+
+    no_cleanup_check = QCheckBox("Skip Cleanup (--no-cleanup)")
+    no_cleanup_check.setChecked(no_cleanup)
+    advanced_layout.addRow(no_cleanup_check)
+
+    main_workflow_check = QCheckBox("Use Main Workflow for Warmup (-u)")
+    main_workflow_check.setChecked(use_main_workflow_only)
+    advanced_layout.addRow(main_workflow_check)
+
+    # Add container to group
+    group_layout = QVBoxLayout()
+    group_layout.addWidget(advanced_container)
+    group_layout.setContentsMargins(20, 10, 20, 10)
+    advanced_group.setLayout(group_layout)
+
+    # Toggle visibility
+    def toggle_advanced(checked):
+        advanced_container.setVisible(checked)
+        win.adjustSize()
+
+    advanced_group.toggled.connect(toggle_advanced)
+    toggle_advanced(False)  # Ensure hidden
+
+    layout.addWidget(advanced_group)
 
     # ------------------------------------------------------------------
     # OK / Cancel
@@ -149,7 +192,6 @@ def run_gui(comfy_path: Path | None = None,
         w = Path(workflow_edit.text().strip())
         use_folder = use_folder_check.isChecked()
 
-        # ---- basic existence ----
         if not c.exists() or not c.is_dir():
             QMessageBox.critical(win, "Error", "ComfyUI folder does not exist or is not a directory.")
             return
@@ -157,24 +199,24 @@ def run_gui(comfy_path: Path | None = None,
             QMessageBox.critical(win, "Error", "Workflow path does not exist.")
             return
 
-        # ---- workflow-specific validation ----
         if w.suffix.lower() == ".json" and use_folder:
-            w = w.parent  # Use folder
+            w = w.parent
         if w.suffix.lower() != ".zip" and not (w / "workflow.json").exists():
-            QMessageBox.critical(
-                win, "Error",
-                "Workflow folder must contain a file named 'workflow.json'.")
+            QMessageBox.critical(win, "Error", "Workflow folder must contain a file named 'workflow.json'.")
             return
 
-        # ---- Save results ----
         win.result = {
             'comfy_path': c,
             'workflow_path': w,
             'extract_minimal': minimal_check.isChecked(),
             'port': port_spin.value(),
             'generations': generations_spin.value(),
-            'num_instances': num_instances_spin.value(),
-            'run_default': default_check.isChecked()
+            'num_instances': instances_spin.value(),
+            'run_default': default_check.isChecked(),
+            'extra_args': extra_args_edit.text().strip().split(),
+            'debug_warmup': debug_check.isChecked(),
+            'no_cleanup': no_cleanup_check.isChecked(),
+            'use_main_workflow_only': main_workflow_check.isChecked()
         }
         win.close()
 
@@ -187,9 +229,6 @@ def run_gui(comfy_path: Path | None = None,
 
     layout.addLayout(btn_row)
 
-    # ------------------------------------------------------------------
-    # Run modal dialog
-    # ------------------------------------------------------------------
     win.result = None
     win.show()
     app.exec_()
