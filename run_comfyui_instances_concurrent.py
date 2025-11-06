@@ -19,6 +19,7 @@ from core.workflow_manager import WorkflowManager
 from core.package_manager import PackageManager
 from core.gui import run_gui
 
+
 class YamlObject:
     def __init__(self, yaml_path):
         self.yaml_path = yaml_path
@@ -80,6 +81,7 @@ class YamlObject:
             value = value[k]
         return True
 
+
 class BenchmarkNodeManager:
     def __init__(self, custom_nodes_path):
         self.custom_nodes_path = custom_nodes_path
@@ -90,8 +92,8 @@ class BenchmarkNodeManager:
             yaml_path = os.path.join(self.benchmark_path, 'config.yaml')
             self.yaml = YamlObject(yaml_path)
 
+
 def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None, debug=False):
-    """Wait for prompt with timeout, health checks, and conditional debug logging."""
     start_time = time.time()
     last_health_check = 0
     health_check_interval = 15
@@ -102,7 +104,6 @@ def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None
     while time.time() - start_time < timeout:
         elapsed = time.time() - start_time
 
-        # Health check (only in debug mode)
         if debug and elapsed - last_health_check > health_check_interval:
             try:
                 health = requests.get(f"http://{server_address}/system_stats", timeout=5)
@@ -115,7 +116,6 @@ def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None
             except Exception as e:
                 print(f"[HEALTH] [{instance_id}] Failed: {e}")
 
-        # Poll history
         try:
             response = requests.get(f"http://{server_address}/history/{prompt_id}", timeout=8)
             if response.status_code == 200:
@@ -143,6 +143,7 @@ def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None
         time.sleep(2)
 
     raise TimeoutError(f"[{instance_id}] Prompt {prompt_id} timed out after {timeout}s on {server_address}")
+
 
 def load_baseconfig(comfy_path, temp_dir=None, log_file=None):
     baseconfig_path = Path(comfy_path) / "baseconfig.json"
@@ -181,6 +182,7 @@ def load_baseconfig(comfy_path, temp_dir=None, log_file=None):
                 f.write(f"Failed to load baseconfig: {e}\n")
         return {"NUM_INSTANCES": 1, "GENERATIONS": 1}
 
+
 def interrupt_process(port):
     server_address = f"127.0.0.1:{port}"
     try:
@@ -194,6 +196,7 @@ def interrupt_process(port):
     except requests.RequestException as e:
         print(f"Interrupt error: {e}")
         return False
+
 
 def check_server_ready(port, timeout=60, interval=2):
     server_address = f"127.0.0.1:{port}"
@@ -209,6 +212,7 @@ def check_server_ready(port, timeout=60, interval=2):
     print(f"Error: Server on port {port} not ready after {timeout}s")
     return False
 
+
 def check_server_running(port):
     server_address = f"127.0.0.1:{port}"
     try:
@@ -219,6 +223,7 @@ def check_server_running(port):
     except requests.ConnectionError:
         return False
     return False
+
 
 def capture_execution_times(proc, output_queue, capture_event, print_lock, log_file=None):
     pattern = re.compile(r"Prompt executed in (\d+\.\d+) seconds")
@@ -274,6 +279,7 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
         if progress_buffer:
             print(f"\n{progress_buffer[-1]}", flush=True)
 
+
 def main():
     if sys.platform == "win32":
         sys.stdout.reconfigure(encoding='utf-8')
@@ -294,16 +300,13 @@ def main():
     parser.add_argument("--debug-warmup", action="store_true", help="Enable verbose debug logging ONLY during warmup")
     parser.add_argument("--extra_args", nargs=argparse.REMAINDER)
     parser.add_argument("--gui", action="store_true", help="Show a Qt-based GUI to pick -c and -w")
+
     args = parser.parse_args()
 
-    # ------------------------------------------------------------------
-    # GUI MODE
-    # ------------------------------------------------------------------
+    # === GUI MODE ===
     if args.gui:
-        # Pre-fill if the user already gave -c / -w on the CLI
         comfy_path_arg = Path(args.comfy_path).resolve() if args.comfy_path else None
         workflow_path_arg = Path(args.workflow_path).resolve() if args.workflow_path else None
-
         try:
             gui_result = run_gui(
                 comfy_path=comfy_path_arg,
@@ -312,12 +315,15 @@ def main():
                 port=args.port,
                 generations=args.generations,
                 num_instances=args.num_instances,
-                run_default=args.run_default
+                run_default=args.run_default,
+                extra_args=args.extra_args or [],
+                debug_warmup=args.debug_warmup,
+                no_cleanup=args.no_cleanup,
+                use_main_workflow_only=args.use_main_workflow_only
             )
         except SystemExit:
             sys.exit(0)
-
-        # Override CLI arguments with GUI selections
+        # Apply GUI results
         args.comfy_path = str(gui_result['comfy_path'])
         args.workflow_path = str(gui_result['workflow_path'])
         args.extract_minimal = gui_result['extract_minimal']
@@ -325,14 +331,17 @@ def main():
         args.generations = gui_result['generations']
         args.num_instances = gui_result['num_instances']
         args.run_default = gui_result['run_default']
-
+        args.extra_args = gui_result['extra_args']
+        args.debug_warmup = gui_result['debug_warmup']
+        args.no_cleanup = gui_result['no_cleanup']
+        args.use_main_workflow_only = gui_result['use_main_workflow_only']
     else:
-        # CLI mode: -c and -w are REQUIRED
         if not args.comfy_path:
             parser.error("--comfy_path (-c) is required when not using --gui.")
         if not args.workflow_path:
             parser.error("--workflow_path (-w) is required when not using --gui.")
 
+    # === LOG FILE ===
     log_file = None
     if args.log is not False:
         workflow_basename = Path(args.workflow_path).stem
@@ -350,9 +359,12 @@ def main():
     package_manager = None
     extra_args = args.extra_args or []
 
-    # Initialize processes and ports BEFORE try block to avoid UnboundLocalError
+    # === INIT LISTS ===
     processes = []
     ports = []
+
+    # === TIMESTAMP FOR ENTIRE RUN ===
+    run_timestamp = datetime.now().strftime("%H%M%S")
 
     try:
         # Handle workflow
@@ -426,12 +438,19 @@ def main():
             port = ports[idx]
             server_address = f"127.0.0.1:{port}"
             client_id = client_ids[idx]
-            debug = args.debug_warmup and is_warmup  # ← ONLY during warmup if flag set
+            debug = args.debug_warmup and is_warmup
+
+            prefix_type = "WARMUP" if is_warmup else "RUN"
+            gen_num = 1 if is_warmup else gen + 1
+            instance_num = idx + 1
 
             try:
                 print(f"[{instance_id}] Starting {'warmup' if is_warmup else f'gen {gen+1}'}")
                 manager = warmup_workflow_manager if is_warmup else workflow_manager
                 workflow = manager.get_workflow(randomize_seeds=True)
+
+                # === UPDATE filename_prefix ===
+                workflow = manager.update_filename_prefixes_in_copy(workflow, prefix_type, instance_num, gen_num, run_timestamp)
 
                 if benchmark_node_manager.exists:
                     bid = next((nid for nid, n in workflow.items() if n.get("_meta", {}).get("title") == "Benchmark Workflow"), None)
@@ -522,31 +541,28 @@ def main():
         ipm = total_images / (total_time / 60) if total_time > 0 else 0
         atpi = total_time / total_images if total_images > 0 else 0
 
-        # === CORRECT PACKAGE NAME (AFTER package_manager exists) ===
+        # === PACKAGE NAME ===
         package_name = "N/A"
         if package_manager and hasattr(package_manager, 'package_name'):
             package_name = package_manager.package_name
         elif args.workflow_path:
-            # Fallback: use stem of original path
             original_path = Path(args.workflow_path)
             package_name = original_path.stem
-            # If it was a ZIP, try to get the inner folder name
             if original_path.suffix.lower() == '.zip' and package_manager and package_manager.temp_dir:
                 inner_dir = package_manager.temp_dir
                 if inner_dir.exists():
                     package_name = inner_dir.name
-        print("\n")# ==================================================
-        print('#########################')
-        print('####_RESULTS_SUMMARY_####')
+
+        print("\n" + "#" * 50)
+        print("####_RESULTS_SUMMARY_####")
         print(f"Benchmarking Package: {package_name}")
         if num_instances > 1:
             print(f"Number of Concurrent ComfyUI Instances: {num_instances}")
             print(f"Number of Image Generations per Instance: {generations}")
         else:
             print(f"Number of Image Generations: {generations}")
-        print(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | IPM (Images/Minute): {ipm:.2f} ")
-        print('#########################')
-        print("\n")
+        print(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | IPM: {ipm:.2f}")
+        print("#" * 50 + "\n")
 
         if log_file:
             with open(log_file, 'a', encoding='utf-8') as f:
@@ -558,7 +574,6 @@ def main():
                 else:
                     f.write(f"Number of Image Generations: {generations}\n")
                 f.write(f"Total time: {total_time:.2f}s | Images: {total_images} | IPM: {ipm:.2f} | Avg/sec per Image: {atpi:.2f}\n")
-                
 
     except KeyboardInterrupt:
         print("User interrupt.")
@@ -587,6 +602,7 @@ def main():
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write(f"Log: {log_file}\n")
         print("Done.")
+
 
 if __name__ == "__main__":
     main()

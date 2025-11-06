@@ -1,8 +1,10 @@
+# core/workflow_manager.py
 import json
 import random
 import re
 import requests
 from pathlib import Path
+
 
 class WorkflowManager:
     def __init__(self, workflow_path, log_file=None):
@@ -44,6 +46,7 @@ class WorkflowManager:
                 error_msg = f"Error: {self.workflow_path} does not contain a valid JSON object (expected a dictionary)."
                 self.log(error_msg)
                 raise ValueError(error_msg)
+            # Validation is now non-fatal
             self._validate_workflow()
         except UnicodeDecodeError as e:
             error_msg = f"Error: Failed to decode {self.workflow_path}. Ensure the file is encoded in UTF-8."
@@ -55,22 +58,27 @@ class WorkflowManager:
             raise e
 
     def _validate_workflow(self):
-        """Validate the workflow JSON, focusing on KSampler and KSamplerAdvanced nodes."""
-        for node_id, node in self.workflow.items():
-            if not isinstance(node_id, str):
-                error_msg = f"Error: Invalid node ID {node_id} in {self.workflow_path}. Node IDs must be strings."
-                self.log(error_msg)
-                raise ValueError(error_msg)
-            if not isinstance(node, dict):
-                error_msg = f"Error: Node {node_id} in {self.workflow_path} is not a valid node dictionary."
-                self.log(error_msg)
-                raise ValueError(error_msg)
-            if node.get("bypass", False):
-                node_title = node.get("_meta", {}).get("title", "Untitled")
-                self.log(f"Node {node_id} ({node_title}) is bypassed")
+        """
+        Validate the workflow JSON, focusing on KSampler and KSamplerAdvanced nodes.
+        This is now non-fatal — logs warnings instead of raising errors.
+        """
+        sampler_nodes = [
+            (nid, node) for nid, node in self.workflow.items()
+            if node.get("class_type") in ["KSampler", "KSamplerAdvanced"]
+        ]
+
+        if not sampler_nodes:
+            self.log("Validation skipped — no KSampler or KSamplerAdvanced nodes found. This is not an error.")
+            return
+
+        self.log(f"Validating {len(sampler_nodes)} sampler node(s)...")
+        all_valid = True
+
+        for node_id, node in sampler_nodes:
             class_type = node.get("class_type")
-            if class_type in ["KSampler", "KSamplerAdvanced"]:
-                inputs = node.get("inputs", {})
+            inputs = node.get("inputs", {})
+
+            try:
                 if class_type == "KSampler":
                     steps = inputs.get("steps")
                     start_step = inputs.get("start_step", 0)
@@ -79,21 +87,29 @@ class WorkflowManager:
                     denoise = inputs.get("denoise")
                     sampler_name = inputs.get("sampler_name")
                     scheduler = inputs.get("scheduler")
-                    self.log(f"DEBUG: KSampler node {node_id} - steps: {steps}, start_step: {start_step}, last_step: {last_step}, cfg: {cfg}, denoise: {denoise}, sampler_name: {sampler_name}, scheduler: {scheduler}")
+
                     if not isinstance(steps, int) or steps <= 0:
-                        raise ValueError(f"Invalid KSampler steps ({steps}) in node {node_id}. Must be a positive integer (e.g., 20).")
+                        self.log(f"WARNING: Node {node_id} (KSampler) - invalid 'steps': {steps} (must be positive int)")
+                        all_valid = False
                     if not isinstance(start_step, int) or start_step < 0:
-                        raise ValueError(f"Invalid KSampler start_step ({start_step}) in node {node_id}. Must be a non-negative integer.")
+                        self.log(f"WARNING: Node {node_id} (KSampler) - invalid 'start_step': {start_step}")
+                        all_valid = False
                     if last_step is not None and (not isinstance(last_step, int) or last_step <= start_step or last_step > steps):
-                        raise ValueError(f"Invalid KSampler last_step ({last_step}) in node {node_id}. Must be an integer > start_step and <= steps.")
+                        self.log(f"WARNING: Node {node_id} (KSampler) - invalid 'last_step': {last_step}")
+                        all_valid = False
                     if not isinstance(cfg, (int, float)) or cfg <= 0:
-                        raise ValueError(f"Invalid KSampler cfg ({cfg}) in node {node_id}. Must be a positive number.")
-                    if not isinstance(denoise, (int, float)) or denoise < 0 or denoise > 1:
-                        raise ValueError(f"Invalid KSampler denoise ({denoise}) in node {node_id}. Must be between 0 and 1.")
+                        self.log(f"WARNING: Node {node_id} (KSampler) - invalid 'cfg': {cfg}")
+                        all_valid = False
+                    if not isinstance(denoise, (int, float)) or not (0 <= denoise <= 1):
+                        self.log(f"WARNING: Node {node_id} (KSampler) - invalid 'denoise': {denoise}")
+                        all_valid = False
                     if not sampler_name:
-                        raise ValueError(f"Missing KSampler sampler_name in node {node_id}.")
+                        self.log(f"WARNING: Node {node_id} (KSampler) - missing 'sampler_name'")
+                        all_valid = False
                     if not scheduler:
-                        raise ValueError(f"Missing KSampler scheduler in node {node_id}.")
+                        self.log(f"WARNING: Node {node_id} (KSampler) - missing 'scheduler'")
+                        all_valid = False
+
                 elif class_type == "KSamplerAdvanced":
                     steps = inputs.get("steps")
                     cfg = inputs.get("cfg")
@@ -101,19 +117,34 @@ class WorkflowManager:
                     scheduler = inputs.get("scheduler")
                     start_at_step = inputs.get("start_at_step")
                     end_at_step = inputs.get("end_at_step")
-                    self.log(f"DEBUG: KSamplerAdvanced node {node_id} - steps: {steps}, cfg: {cfg}, sampler_name: {sampler_name}, scheduler: {scheduler}, start_at_step: {start_at_step}, end_at_step: {end_at_step}")
+
                     if not isinstance(steps, int) or steps <= 0:
-                        raise ValueError(f"Invalid KSamplerAdvanced steps ({steps}) in node {node_id}. Must be a positive integer (e.g., 20).")
+                        self.log(f"WARNING: Node {node_id} (KSamplerAdvanced) - invalid 'steps': {steps}")
+                        all_valid = False
                     if not isinstance(cfg, (int, float)) or cfg <= 0:
-                        raise ValueError(f"Invalid KSamplerAdvanced cfg ({cfg}) in node {node_id}. Must be a positive number.")
+                        self.log(f"WARNING: Node {node_id} (KSamplerAdvanced) - invalid 'cfg': {cfg}")
+                        all_valid = False
                     if not sampler_name:
-                        raise ValueError(f"Missing KSamplerAdvanced sampler_name in node {node_id}.")
+                        self.log(f"WARNING: Node {node_id} (KSamplerAdvanced) - missing 'sampler_name'")
+                        all_valid = False
                     if not scheduler:
-                        raise ValueError(f"Missing KSamplerAdvanced scheduler in node {node_id}.")
+                        self.log(f"WARNING: Node {node_id} (KSamplerAdvanced) - missing 'scheduler'")
+                        all_valid = False
                     if not isinstance(start_at_step, int) or start_at_step < 0:
-                        raise ValueError(f"Invalid KSamplerAdvanced start_at_step ({start_at_step}) in node {node_id}. Must be a non-negative integer.")
-                    if not isinstance(end_at_step, int) or end_at_step <= start_step:
-                        raise ValueError(f"Invalid KSamplerAdvanced end_at_step ({end_at_step}) in node {node_id}. Must be an integer > start_at_step.")
+                        self.log(f"WARNING: Node {node_id} (KSamplerAdvanced) - invalid 'start_at_step': {start_at_step}")
+                        all_valid = False
+                    if not isinstance(end_at_step, int) or end_at_step <= start_at_step:
+                        self.log(f"WARNING: Node {node_id} (KSamplerAdvanced) - invalid 'end_at_step': {end_at_step}")
+                        all_valid = False
+
+            except Exception as e:
+                self.log(f"WARNING: Node {node_id} ({class_type}) - validation error: {e}")
+                all_valid = False
+
+        if all_valid:
+            self.log("All sampler nodes passed validation.")
+        else:
+            self.log("Validation completed with warnings. Continuing execution...")
 
     def apply_overrides(self, override_path):
         """Apply overrides from a JSON file to the workflow."""
@@ -216,6 +247,65 @@ class WorkflowManager:
                     if re.search(r"Random", title, re.IGNORECASE):
                         workflow[node_id]["inputs"]["value"] = random.randint(0, 2**32 - 1)
         return workflow
+
+    def update_filename_prefixes_in_copy(self, workflow_copy, prefix_type, instance_num, gen_num, timestamp):
+        """
+        Update filename_prefix in SaveImage nodes:
+          - Add timestamp folder: {base_path}/{timestamp}/
+          - Append suffix to filename: _{timestamp}_{prefix_type}_{instance}-{gen}
+
+        Example:
+            Original: "flux_krea/flux_krea"
+            → Folder: flux_krea/020911/
+            → File:  flux_krea_020911_RUN_2-4_00001_.png
+
+        Args:
+            workflow_copy (dict): Copy of the workflow to modify.
+            prefix_type (str): 'WARMUP' or 'RUN'.
+            instance_num (int): 1-based instance number.
+            gen_num (int): 1-based generation number.
+            timestamp (str): HHMMSS timestamp.
+
+        Returns:
+            dict: Modified workflow copy.
+        """
+        timestamp_folder = timestamp  # e.g., "020911"
+        suffix = f"{timestamp}_{prefix_type}_{instance_num}-{gen_num}"  # e.g., "020911_RUN_2-4"
+        modified = False
+
+        for node_id, node in workflow_copy.items():
+            if node.get("class_type") == "SaveImage":
+                inputs = node.get("inputs", {})
+                if "filename_prefix" in inputs:
+                    current_prefix = inputs["filename_prefix"]
+
+                    if isinstance(current_prefix, str):
+                        # Split into base path and filename part
+                        parts = current_prefix.strip("/").split("/", 1)
+                        base_path = parts[0] if len(parts) > 1 else ""
+                        filename_part = parts[-1] if len(parts) > 1 else parts[0]
+
+                        # Build new path: base_path/timestamp/filename_part_suffix
+                        new_path = f"{base_path}/{timestamp_folder}/{filename_part}_{suffix}" if base_path else f"{timestamp_folder}/{filename_part}_{suffix}"
+
+                        inputs["filename_prefix"] = new_path
+                        self.log(f"Updated filename_prefix in node {node_id}: '{current_prefix}' → '{new_path}'")
+                        modified = True
+
+                    elif isinstance(current_prefix, list) and len(current_prefix) > 0:
+                        orig = current_prefix[0]
+                        parts = orig.strip("/").split("/", 1)
+                        base_path = parts[0] if len(parts) > 1 else ""
+                        filename_part = parts[-1] if len(parts) > 1 else parts[0]
+                        new_path = f"{base_path}/{timestamp_folder}/{filename_part}_{suffix}" if base_path else f"{timestamp_folder}/{filename_part}_{suffix}"
+                        current_prefix[0] = new_path
+                        self.log(f"Updated filename_prefix (list) in node {node_id}: '{orig}' → '{new_path}'")
+                        modified = True
+
+        if not modified:
+            self.log("No SaveImage nodes with filename_prefix found.")
+
+        return workflow_copy
 
     def queue_prompt(self, client_id, server_address):
         """
