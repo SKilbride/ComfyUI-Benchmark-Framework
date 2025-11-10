@@ -11,11 +11,15 @@ Key features:
 - Generates metrics like images per minute, average time per image, and execution times.
 - Logs output and handles cleanup, including process termination and temporary directories.
 
+## Prerequisites
+1. A working Git installation
+   
 ## Installation/Setup
-1. Install ComfyUI (portable or standard installation).
-2. Place the script (`run_comfyui_instances_concurrent.py`), `workflow_manager.py`, and `package_manager.py` in the same directory as your ComfyUI executable (e.g., next to `run_nvidia_gpu.bat`).
-3. Ensure Python dependencies are available (e.g., via `python_embedded` in portable installs): `argparse`, `subprocess`, `requests`, `json`, `uuid`, `os`, `sys`, `yaml`, `re`, `concurrent.futures`, `pathlib`, `threading`, `queue`, `datetime`.
-4. Optionally install the `comfyui-benchmark` custom node for enhanced benchmarking output (JSON statistics files).
+1. Install ComfyUI (portable, manual installation or desktop app version).
+2. Open a CMD, Powershell or Terminal console in the ComfyUI folder of your ComfyUI installation.  Note: For desktop application installations this folder will be located in the user Documents directory.
+3. Use Git to clone this repository:  ```git clone https://github.com/SKilbride/ComfyUI-Benchmark-Framework```
+4. NOTE: All Python commands must utilize the python environment used with ComfyUI, for Python
+5. Optionally install the `comfyui-benchmark` custom node for enhanced benchmarking output (JSON statistics files).
 
 ## Running the Benchmark
 The benchmarking framework works by running prebuilt benchmarking packages. These packages contain all the necessary primary and secondary model files required to run a dedicated benchmark workflow. Workflow files are ComfyUI JSON workflow files configured for running using the ComfyUI API mode.
