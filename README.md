@@ -19,26 +19,77 @@ Key features:
 2. Open a CMD, Powershell or Terminal console in the ComfyUI folder of your ComfyUI installation.  Note: For desktop application installations this folder will be located in the user Documents directory.
 3. Use Git to clone this repository:  ```git clone https://github.com/SKilbride/ComfyUI-Benchmark-Framework```
 4. NOTE: All Python commands must utilize the python environment used with ComfyUI, for Python
-5. Optionally install the `comfyui-benchmark` custom node for enhanced benchmarking output (JSON statistics files).
+5. CD into the ComfyUI-Benchmark-Framework directory
+6. Install the necessary dependencies ```python -m pip install -r requirements.txt```
+7. Optionally install the `comfyui-benchmark` custom node for enhanced benchmarking output (JSON statistics files).
 
 ## Running the Benchmark
 The benchmarking framework works by running prebuilt benchmarking packages. These packages contain all the necessary primary and secondary model files required to run a dedicated benchmark workflow. Workflow files are ComfyUI JSON workflow files configured for running using the ComfyUI API mode.
 
 **Warmup:** Each benchmarking run performs an initial warmup run to load models into memory and initialize the pipeline. The warmup time is not included in any benchmarking metrics. By default, it uses `warmup.json` if available; use `-u` to force `workflow.json` for warmup.
 
-Usage:
+##Usage:
+### GUI Mode 
+Running the benchmark framework in GUI mode provides a visual interface for setting the benchmark options and running the benchmark framework
+<img width="1097" height="580" alt="image" src="https://github.com/user-attachments/assets/7e9f0176-26d5-48c5-a5a1-08dfcd56dc89" />
+Launch the benchmark framework with GUI
 ```
-python run_comfyui_instances_concurrent.py [options]
+python run_comfyui_benchmark_framework.py --gui
+```
+***ComfyUI Folder:*** 
+> Select the "ComfyUI" folder of your ComfyUI installation. 
+
+***Workflow:*** 
+> Select the packaged benchmark .zip file. Alternately a benchmarking .json file can be selected within a folder containing the required benchmarking files. When selecting a .json file for benchmarking, the *Use Folder (for .json)* checkbox should be enabled.
+
+***Minimal Extraction:*** 
+> When running a benchmark workflow .zip, all of the required models, and nodes will be extracted and installed into the target ComfyUI installation. If a benchmark workflow has previously been executed and the benchmarking files extracted and installed, additional runs of the same benchmark package use Winimal Extraction to avoid unnecessarily extracting and installing the large model files, and only extracting the smaller benchmark workflow files. **SHOULD NOT BE USED ON THE INITIAL RUN OF A BENCHMARK PACKAGE**.
+
+***Port:***
+> Specify the port to use when running ComfyUI. ComfyUI manual installations and ComfyUI portable installations use port 8188 by default, while ComfyUI Desktop App uses port 8000 by default.
+
+***Number of Generations:***
+> Specify the number of assets to generate.  Depending on the workflow images, video, or 3D objects are amoung the types of assets which may be generated. For image based assets, 10 is good default value, while for video, a single video may be a good default value. 
+
+***Use Package Defaults:***
+> Use the benchnark package default values for the number of generations and number of concurrent sessions. Benchmark packages contain a baseconfig.json file which contains the recommended default values values for the benchmark package. Using package defaults will automatically set the benchmark to use these values. 
+
+#### Advanced Options
+*Note: Settings in the Advanced Option section are for benchmarking advanced use case workflows.*
+<img width="1113" height="809" alt="image" src="https://github.com/user-attachments/assets/a4ac5c8a-4849-4b78-a3b7-72e7691a0100" />
+
+***Concurrent Sessions:***
+> Specify the number of concurrent sessions of ComfyUI. Running with more than one session will launch multiple ComfyUI server instances and run workloads in parallel on each session. The number of concurrent sessions possible is limited by the size of the models in the benchmarking workflow and the amount of available VRAM. Profesional GPUs with large VRAM capacity such as the RTX PRO 6000 may be able to run multiple concurrent sessions, especially for workloads running FP8 or FP4 models. This can showcase how these GPUs perform when utilized in a environment as a shared resource.
+
+***Override File:***
+> An override file is a json file which can be used to override spcific values within an existing workflow benchmark file.  For example an override file can change the number of steps utilized or modifiy the output resolution, without having to create a new benchmark workflow package. OVerride files are covered in a later section of this readme.
+
+***Extra Args:*** 
+> The Extra Args option can be used to pass additional arguments which would normally be passed to ComfyUI to change it's default behavior. Some examples are:  --lowvram or --force-cpu
+
+***Debug Warmup:***
+> Used to provide additional debugging output during warmup runs.
+
+***Skip Cleanup:***
+> A debugging option to skip normal cleanup steps
+
+***Use Main Workflow for Warmup:***
+> Some workflows may use a different warmup workflow then used for the main benchmarking workflow. For certain workflows like video generation this allow the benchmark to still preload the model files, but not require a full video generation by reducing the number of steps or frames generated in the warmup. However, it may be desired to run the warmup with the same workflow as the main. (ie. it may desirable to understand the performance differences between first run and second run to understand model loading impact). 
+
+##CLI Mode
+The benchmarking framework can also be run using command line options
+```
+python run_comfyui_benchmark_framework.py [options]
 ```
 
-Sample command (assumes a ComfyUI portable installation with the script in the same folder as `run_nvidia_gpu.bat`):
+Sample command (assumes a ComfyUI portable installation with the comfyui-benchmarking-framework folder existing in the ComfyUI folder and the ComfyUI folder is the current working directory):
 ```
-python_embedded\python run_comfyui_instances_concurrent.py -c .\ComfyUI -w c:\workflows\wan_2.2_i2v_14b_640x640x81x20s.zip -r -l
+..\python_embeded\python .\comfyui-benchmark-framework\run_comfyui_benchmark_framework.py -c ..\ComfyUI -w c:\workflows\wan_2.2_i2v_14b_640x640x81x20s.zip -r -l
 ```
 
 Another sample with overrides and multiple instances:
 ```
-python_embedded\python run_comfyui_instances_concurrent.py -c .\ComfyUI -w c:\workflows\flux_workflow.zip -n 2 -g 5 -o overrides.json -l logs/ -p 8190 --extra_args --cpu
+..\python_embeded\python .\comfyui-benchmark-framework\run_comfyui_benchmark_framework.py -c ..\ComfyUI -w c:\workflows\flux_workflow.zip -n 2 -g 5 -o overrides.json -l logs/ -p 8190 --extra_args --cpu
 ```
 
 ## Command Line Arguments
@@ -47,7 +98,7 @@ The ComfyUI path (`-c`) and workflow path (`-w`) are required. All other argumen
 - **`-h, --help`**
   - **Description**: Displays the help message with all available arguments and their descriptions, then exits.
   - **Usage**: Use to quickly check available options without running the script.
-  - **Example**: `python run_comfyui_instances_concurrent.py --help`
+  - **Example**: `python run_comfyui_benchmark_framework.py --help`
 
 - **`-c, --comfy_path`** (Required)
   - **Description**: Specifies the path to the ComfyUI installation directory. This must point to the folder containing the ComfyUI executable (`main.py`) and subdirectories like `custom_nodes`, `models`, and `user`.
