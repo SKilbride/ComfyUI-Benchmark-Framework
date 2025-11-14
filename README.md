@@ -28,7 +28,7 @@ The benchmarking framework works by running prebuilt benchmarking packages. Thes
 
 **Warmup:** Each benchmarking run performs an initial warmup run to load models into memory and initialize the pipeline. The warmup time is not included in any benchmarking metrics. By default, it uses `warmup.json` if available; use `-u` to force `workflow.json` for warmup.
 
-##Usage:
+## Usage:
 ### GUI Mode 
 Running the benchmark framework in GUI mode provides a visual interface for setting the benchmark options and running the benchmark framework
 <img width="1097" height="580" alt="image" src="https://github.com/user-attachments/assets/7e9f0176-26d5-48c5-a5a1-08dfcd56dc89" />
