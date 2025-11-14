@@ -319,7 +319,8 @@ def main():
                 extra_args=args.extra_args or [],
                 debug_warmup=args.debug_warmup,
                 no_cleanup=args.no_cleanup,
-                use_main_workflow_only=args.use_main_workflow_only
+                use_main_workflow_only=args.use_main_workflow_only,
+                override=args.override
             )
         except SystemExit:
             sys.exit(0)
@@ -335,6 +336,7 @@ def main():
         args.debug_warmup = gui_result['debug_warmup']
         args.no_cleanup = gui_result['no_cleanup']
         args.use_main_workflow_only = gui_result['use_main_workflow_only']
+        args.override = gui_result['override']
     else:
         if not args.comfy_path:
             parser.error("--comfy_path (-c) is required when not using --gui.")
@@ -538,7 +540,7 @@ def main():
                 exec_times.append(q.get())
         total_exec = sum(exec_times)
         avg_exec = total_exec / len(exec_times) if exec_times else 0
-        ipm = total_images / (total_time / 60) if total_time > 0 else 0
+        apm = total_images / (total_time / 60) if total_time > 0 else 0
         atpi = total_time / total_images if total_images > 0 else 0
 
         # === PACKAGE NAME ===
@@ -561,7 +563,7 @@ def main():
             print(f"Number of Image Generations per Instance: {generations}")
         else:
             print(f"Number of Image Generations: {generations}")
-        print(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | IPM: {ipm:.2f}")
+        print(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM (Assets per Minute): {apm:.2f}")
         print("#" * 50 + "\n")
 
         if log_file:
@@ -573,7 +575,7 @@ def main():
                     f.write(f"Number of Image Generations per Instance: {generations}\n")
                 else:
                     f.write(f"Number of Image Generations: {generations}\n")
-                f.write(f"Total time: {total_time:.2f}s | Images: {total_images} | IPM: {ipm:.2f} | Avg/sec per Image: {atpi:.2f}\n")
+                f.write(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM (Assets per Minute): {apm:.2f}")
 
     except KeyboardInterrupt:
         print("User interrupt.")
