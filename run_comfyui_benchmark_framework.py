@@ -18,6 +18,7 @@ sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 from core.workflow_manager import WorkflowManager
 from core.package_manager import PackageManager
 from core.gui import run_gui
+from core.gui import show_restart_required_dialog
 
 
 class YamlObject:
@@ -299,6 +300,7 @@ def main():
     parser.add_argument("--no-cleanup", action="store_true")
     parser.add_argument("--debug-warmup", action="store_true", help="Enable verbose debug logging ONLY during warmup")
     parser.add_argument("--extra_args", nargs=argparse.REMAINDER)
+    parser.add_argument("--force-extract", "-f", action="store_true", help="Force re-extraction of all models/nodes even if identical/newer")
     parser.add_argument("--gui", action="store_true", help="Show a Qt-based GUI to pick -c and -w")
 
     args = parser.parse_args()
@@ -320,6 +322,7 @@ def main():
                 debug_warmup=args.debug_warmup,
                 no_cleanup=args.no_cleanup,
                 use_main_workflow_only=args.use_main_workflow_only,
+                force_extract=args.force_extract,  
                 override=args.override
             )
         except SystemExit:
@@ -379,8 +382,12 @@ def main():
                 raise FileNotFoundError("workflow.json not found")
         elif workflow_path.suffix.lower() == '.zip':
             package_manager = PackageManager(
-                zip_path=workflow_path, comfy_path=comfy_path,
-                temp_path=args.temp_path, extract_minimal=args.extract_minimal, log_file=log_file
+                zip_path=workflow_path,
+                comfy_path=comfy_path,
+                temp_path=args.temp_path,
+                extract_minimal=args.extract_minimal,
+                force_extract=args.force_extract,   # <-- NEW
+                log_file=log_file
             )
             workflow_path = package_manager.extract_zip()
             warmup_workflow_path = workflow_path.parent / "warmup.json" if not args.use_main_workflow_only else workflow_path
@@ -417,6 +424,17 @@ def main():
             port = base_port + i
             ports.append(port)
             if check_server_running(port):
+                if package_manager.extractor.custom_nodes_extracted:
+                    print("Custom nodes were installed while a server was already running.  ComfyUI must be restarted before running the benchmark.")
+                    show_restart_required_dialog(
+                        package_manager=package_manager,
+                        args=args,           # the argparse namespace
+                        log_file=log_file    # optional: pass log path
+                    )
+
+                    # Optionally: exit after dialog so user can restart
+                    print("Exiting. Please restart ComfyUI and re-run the command.")
+                    sys.exit(0)
                 processes.append(None)
                 continue
             cmd = ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"] + extra_args
