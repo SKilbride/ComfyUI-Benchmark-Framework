@@ -31,7 +31,8 @@ The benchmarking framework works by running prebuilt benchmarking packages. Thes
 ## Usage:
 ### GUI Mode 
 Running the benchmark framework in GUI mode provides a visual interface for setting the benchmark options and running the benchmark framework
-<img width="1097" height="580" alt="image" src="https://github.com/user-attachments/assets/7e9f0176-26d5-48c5-a5a1-08dfcd56dc89" />
+<img width="1105" height="604" alt="image" src="https://github.com/user-attachments/assets/eef79223-ca69-4d38-94cf-5d13116b28d6" />
+
 Launch the benchmark framework with GUI
 ```
 python run_comfyui_benchmark_framework.py --gui
@@ -41,9 +42,6 @@ python run_comfyui_benchmark_framework.py --gui
 
 ***Workflow:*** 
 > Select the packaged benchmark .zip file. Alternately a benchmarking .json file can be selected within a folder containing the required benchmarking files. When selecting a .json file for benchmarking, the *Use Folder (for .json)* checkbox should be enabled.
-
-***Minimal Extraction:*** 
-> When running a benchmark workflow .zip, all of the required models, and nodes will be extracted and installed into the target ComfyUI installation. If a benchmark workflow has previously been executed and the benchmarking files extracted and installed, additional runs of the same benchmark package use Winimal Extraction to avoid unnecessarily extracting and installing the large model files, and only extracting the smaller benchmark workflow files. **SHOULD NOT BE USED ON THE INITIAL RUN OF A BENCHMARK PACKAGE**.
 
 ***Port:***
 > Specify the port to use when running ComfyUI. ComfyUI manual installations and ComfyUI portable installations use port 8188 by default, while ComfyUI Desktop App uses port 8000 by default.
@@ -56,7 +54,7 @@ python run_comfyui_benchmark_framework.py --gui
 
 #### Advanced Options
 *Note: Settings in the Advanced Option section are for benchmarking advanced use case workflows.*
-<img width="1113" height="809" alt="image" src="https://github.com/user-attachments/assets/a4ac5c8a-4849-4b78-a3b7-72e7691a0100" />
+<img width="1128" height="859" alt="image" src="https://github.com/user-attachments/assets/ee5cb5c9-4e50-4679-9e21-5c2641b0c142" />
 
 ***Concurrent Sessions:***
 > Specify the number of concurrent sessions of ComfyUI. Running with more than one session will launch multiple ComfyUI server instances and run workloads in parallel on each session. The number of concurrent sessions possible is limited by the size of the models in the benchmarking workflow and the amount of available VRAM. Profesional GPUs with large VRAM capacity such as the RTX PRO 6000 may be able to run multiple concurrent sessions, especially for workloads running FP8 or FP4 models. This can showcase how these GPUs perform when utilized in a environment as a shared resource.
@@ -66,6 +64,9 @@ python run_comfyui_benchmark_framework.py --gui
 
 ***Extra Args:*** 
 > The Extra Args option can be used to pass additional arguments which would normally be passed to ComfyUI to change it's default behavior. Some examples are:  --lowvram or --force-cpu
+
+***Minimal Extraction:*** (Deprecated - Automatically handled by framework)
+> When running a benchmark workflow .zip, all of the required models, and nodes will be extracted and installed into the target ComfyUI installation. If a benchmark workflow has previously been executed and the benchmarking files extracted and installed, additional runs of the same benchmark package use Winimal Extraction to avoid unnecessarily extracting and installing the large model files, and only extracting the smaller benchmark workflow files. **SHOULD NOT BE USED ON THE INITIAL RUN OF A BENCHMARK PACKAGE**.
 
 ***Debug Warmup:***
 > Used to provide additional debugging output during warmup runs.
