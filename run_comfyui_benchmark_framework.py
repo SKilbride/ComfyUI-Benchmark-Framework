@@ -93,6 +93,28 @@ class BenchmarkNodeManager:
             yaml_path = os.path.join(self.benchmark_path, 'config.yaml')
             self.yaml = YamlObject(yaml_path)
 
+def get_comfy_python(comfy_path: Path) -> str:
+    """
+    Return the correct python executable for a ComfyUI installation.
+    Prioritizes: .venv > venv > conda (fallback to current)
+    """
+    comfy_path = Path(comfy_path)
+
+    # 1. Standard venv (.venv or venv)
+    candidates = [
+        comfy_path / ".venv" / "Scripts" / "python.exe",
+        comfy_path / ".venv" / "bin" / "python",
+        comfy_path / "venv" / "Scripts" / "python.exe",
+        comfy_path / "venv" / "bin" / "python",
+    ]
+    for cand in candidates:
+        if cand.exists():
+            print(f"[INFO] Using ComfyUI's virtual environment: {cand}")
+            return str(cand)
+
+    # 2. Fallback: hope we're already in the right env
+    print(f"[WARNING] No .venv found in {comfy_path} — using current Python ({sys.executable})")
+    return sys.executable
 
 def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None, debug=False):
     start_time = time.time()
@@ -437,7 +459,14 @@ def main():
                     sys.exit(0)
                 processes.append(None)
                 continue
-            cmd = ["python", "main.py", "--port", str(port), "--listen", "127.0.0.1"] + extra_args
+            python_exe = get_comfy_python(comfy_path)
+            cmd = [
+                python_exe,
+                "main.py",
+                "--port", str(port),
+                "--disable-xformers",  # optional: if you get errors
+                *extra_args
+            ]
             proc = subprocess.Popen(
                 cmd, cwd=comfy_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
