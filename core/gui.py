@@ -7,9 +7,10 @@ try:
     from qtpy.QtWidgets import (
         QApplication, QWidget, QVBoxLayout, QHBoxLayout, QGroupBox,
         QLabel, QLineEdit, QPushButton, QFileDialog, QMessageBox,
-        QCheckBox, QSpinBox, QFormLayout
+        QCheckBox, QSpinBox, QFormLayout, QDialog, QTextEdit, 
     )
     from qtpy.QtCore import Qt
+    from qtpy.QtGui import QFont
     QT_AVAILABLE = True
 except Exception:  # pragma: no cover
     QT_AVAILABLE = False
@@ -51,7 +52,8 @@ def run_gui(comfy_path: Path | None = None,
             debug_warmup: bool = False,
             no_cleanup: bool = False,
             use_main_workflow_only: bool = False,
-            override: str | None = None) -> dict:
+            override: str | None = None,
+            force_extract: bool = False) -> dict:
     if not QT_AVAILABLE:
         print("Qt bindings not found – falling back to CLI mode.")
         sys.exit(0)
@@ -116,14 +118,7 @@ def run_gui(comfy_path: Path | None = None,
 
     _add_with_margin(layout, workflow_row)
 
-    # ------------------------------------------------------------------
-    # Minimal Extraction
-    # ------------------------------------------------------------------
-    minimal_check = QCheckBox("Minimal Extraction (Models/Nodes must be previously installed) (-e)")
-    minimal_check.setChecked(extract_minimal)
-    minimal_check.setToolTip("Minimal extraction, only workflow.json, warmup.json, and baseconfig.json are extracted")
-    _add_with_margin(layout, minimal_check)
-
+    
     # ------------------------------------------------------------------
     # Port
     # ------------------------------------------------------------------
@@ -211,6 +206,14 @@ def run_gui(comfy_path: Path | None = None,
     extra_args_edit.setPlaceholderText("--lowvram --force-cpu etc.")
     advanced_layout.addRow("Extra Args:", extra_args_edit)
 
+    # ------------------------------------------------------------------
+    # Minimal Extraction
+    # ------------------------------------------------------------------
+    minimal_check = QCheckBox("Minimal Extraction (Models/Nodes must be previously installed) (-e) (deprecated)")
+    minimal_check.setChecked(extract_minimal)
+    minimal_check.setToolTip("Minimal extraction, only workflow.json, warmup.json, and baseconfig.json are extracted")
+    advanced_layout.addRow(minimal_check) 
+
     # --- Debug Warmup ---
     debug_check = QCheckBox("Debug Warmup (--debug-warmup)")
     debug_check.setChecked(debug_warmup)
@@ -225,6 +228,10 @@ def run_gui(comfy_path: Path | None = None,
     main_workflow_check = QCheckBox("Use Main Workflow for Warmup (-u)")
     main_workflow_check.setChecked(use_main_workflow_only)
     advanced_layout.addRow(main_workflow_check)
+
+    force_extract_check = QCheckBox("Force Extract All (--force-extract)")
+    force_extract_check.setChecked(False)
+    advanced_layout.addRow(force_extract_check)
 
     # Add container to group
     group_layout = QVBoxLayout()
@@ -241,6 +248,9 @@ def run_gui(comfy_path: Path | None = None,
             max_h = win.screen().availableGeometry().height() - 100
             if win.height() > max_h:
                 win.resize(660, max_h)
+        else:
+            win.resize(660, 280)
+
 
     advanced_group.toggled.connect(toggle_advanced)
     toggle_advanced(False)
@@ -290,6 +300,7 @@ def run_gui(comfy_path: Path | None = None,
             'debug_warmup': debug_check.isChecked(),
             'no_cleanup': no_cleanup_check.isChecked(),
             'use_main_workflow_only': main_workflow_check.isChecked(),
+            'force_extract': force_extract_check.isChecked(),
             'override': override_path or None
         }
         win.close()
@@ -312,3 +323,104 @@ def run_gui(comfy_path: Path | None = None,
         sys.exit(0)
 
     return win.result
+
+def show_restart_required_dialog(package_manager, args, log_file=None):
+    if not getattr(package_manager.extractor, "custom_nodes_extracted", False):
+        return
+
+    dialog = QDialog()
+    dialog.setWindowTitle("Restart Required")
+    dialog.setModal(True)
+
+    # === TIGHT LAYOUT ===
+    layout = QVBoxLayout()
+    layout.setContentsMargins(12, 12, 12, 12)   # reduced from 16
+    layout.setSpacing(8)                        # reduced from 12
+    dialog.setLayout(layout)
+
+    # === Header (compact) ===
+    header = QLabel(
+        "<b>Custom Nodes were installed into an active ComfyUI session.</b><br>"
+        "ComfyUI <u>must be restarted</u> before the benchmark can continue.<br><br>"
+        "To run the benchmark with the current settings, run:"
+    )
+    header.setWordWrap(True)
+    layout.addWidget(header)
+
+    # === Build command ===
+    cmd_parts = [
+        "python",
+        ".\\comfy-benchmark-framework\\run_comfyui_benchmark_framework.py",
+        "-c", f'"{args.comfy_path}"',
+        "-w", f'"{args.workflow_path}"',
+        "-p", str(args.port),
+        "-g", str(args.generations),
+    ]
+    if getattr(args, "extract_minimal", False): cmd_parts.append("-e")
+    if getattr(args, "run_default", False): cmd_parts.append("-r")
+    if getattr(args, "debug_warmup", False): cmd_parts.append("--debug-warmup")
+    if getattr(args, "no_cleanup", False): cmd_parts.append("--no-cleanup")
+    if getattr(args, "use_main_workflow_only", False): cmd_parts.append("-u")
+    if getattr(args, "force_extract", False): cmd_parts.append("-f")
+    if getattr(args, "override", None): cmd_parts.extend(["-o", f'"{args.override}"'])
+    if getattr(args, "num_instances", 1) != 1: cmd_parts.extend(["-n", str(args.num_instances)])
+    if getattr(args, "extra_args", []): cmd_parts.extend(args.extra_args)
+
+    full_command = " ".join(cmd_parts)
+
+    # === Command Label ===
+    cmd_label = QLabel("Command to re-run after restart:")
+    cmd_label.setStyleSheet("font-weight: bold;")
+    layout.addWidget(cmd_label)
+
+    # === Command Box (tight & readable) ===
+    cmd_edit = QTextEdit()
+    cmd_edit.setPlainText(full_command)
+    cmd_edit.setFont(QFont("Consolas", 10))
+    cmd_edit.setMaximumHeight(80)  # 2–3 lines max
+    cmd_edit.setStyleSheet("""
+        QTextEdit {
+            background-color: #f8f8f8;
+            color: #1a1a1a;
+            padding: 6px;
+            border: 1px solid #ccc;
+            border-radius: 4px;
+        }
+    """)
+    cmd_edit.setReadOnly(True)
+    layout.addWidget(cmd_edit)
+
+    # === Button Row (compact) ===
+    btn_layout = QHBoxLayout()
+    btn_layout.setSpacing(8)
+
+    copy_btn = QPushButton("Copy Command")
+    copy_btn.setFixedWidth(120)
+    copy_btn.clicked.connect(lambda: QApplication.clipboard().setText(full_command))
+    btn_layout.addWidget(copy_btn)
+
+    ok_btn = QPushButton("OK")
+    ok_btn.setDefault(True)
+    ok_btn.setFixedWidth(80)
+    ok_btn.clicked.connect(dialog.accept)
+    btn_layout.addWidget(ok_btn)
+
+    btn_layout.addStretch()
+    layout.addLayout(btn_layout)
+
+    # === Optional Log Path (tight) ===
+    if log_file:
+        log_info = QLabel(f"<small>Log: <code>{log_file}</code></small>")
+        layout.addWidget(log_info)
+
+        log_copy = QPushButton("Copy Log Path")
+        log_copy.setFixedWidth(120)
+        log_copy.clicked.connect(lambda: QApplication.clipboard().setText(str(log_file)))
+        log_btn_layout = QHBoxLayout()
+        log_btn_layout.addStretch()
+        log_btn_layout.addWidget(log_copy)
+        layout.addLayout(log_btn_layout)
+
+    # === Auto-size to content ===
+    dialog.resize(680, dialog.sizeHint().height())
+    dialog.exec_()
