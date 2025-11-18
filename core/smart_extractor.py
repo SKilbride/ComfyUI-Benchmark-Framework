@@ -39,16 +39,10 @@ def _get_node_identity(toml_path: Path) -> Tuple[Optional[str], Optional[str]]:
 def _files_match(local_path: Path, zip_info: zipfile.ZipInfo) -> bool:
     """Compare file size only — mtime in ZIP is unreliable."""
     if not local_path.exists():
-        print(f"[DEBUG] File missing locally: {local_path}")
         return False
     try:
-        stat = local_path.stat()
-        size_match = stat.st_size == zip_info.file_size
-        print(f"[DEBUG] Compare {local_path.name}: size={'MATCH' if size_match else 'DIFF'} "
-              f"(local={stat.st_size}, zip={zip_info.file_size})")
-        return size_match
-    except OSError as e:
-        print(f"[DEBUG] OSError on {local_path}: {e}")
+        return local_path.stat().st_size == zip_info.file_size
+    except OSError:
         return False
 
 
@@ -83,9 +77,13 @@ class SmartExtractor:
 
         with zipfile.ZipFile(self.zip_path, "r") as zf:
             self._extract_root_jsons(zf)
+
             if not self.minimal:
-                self._extract_models(zf)
+                # Generic extraction for everything except custom_nodes
+                self._extract_generic_comfyui_contents(zf)
+                # custom_nodes keeps its special version-check logic
                 self._extract_custom_nodes(zf)
+
             self._run_script_if_exists(self.temp_dir / "pre.py")
             self._run_script_if_exists(self.temp_dir / "post.py")
 
@@ -104,30 +102,42 @@ class SmartExtractor:
             self.extracted_files.append(target)
             self._log(f"[smart_extractor] Extracted root: {target.name}")
 
-    def _extract_models(self, zf: zipfile.ZipFile):
+    def _extract_generic_comfyui_contents(self, zf: zipfile.ZipFile):
+        """
+        Extract everything under ComfyUI/ EXCEPT custom_nodes/
+        Uses the same smart (size-based) or force logic as the old model extraction.
+        Covers: models/, input/, loras/, vae/, styles/, upscale_models/, etc.
+        """
+        comfy_prefix = "ComfyUI/"
+        items = [i for i in zf.infolist()
+                 if i.filename.startswith(comfy_prefix)
+                 and not i.is_dir()
+                 and "/custom_nodes/" not in i.filename]
+
+        if not items:
+            return
+
         if self.force_extraction:
-            self._log("[smart_extractor] FORCE: extracting all models")
+            self._log("[smart_extractor] FORCE: extracting all generic ComfyUI content")
         else:
-            self._log("[smart_extractor] SMART: checking model files")
+            self._log("[smart_extractor] SMART: extracting generic ComfyUI content (models, input, etc.)")
 
-        model_prefix = "ComfyUI/models/"
-        model_infos = [i for i in zf.infolist()
-                       if i.filename.startswith(model_prefix) and not i.is_dir()]
-
-        for info in model_infos:
-            rel_path = Path(info.filename[len(model_prefix):])
-            local_path = self.comfy_path / "models" / rel_path
+        for info in items:
+            rel_path = Path(info.filename[len(comfy_prefix):])
+            local_path = self.comfy_path / rel_path
             os.makedirs(local_path.parent, exist_ok=True)
 
-            if self.force_extraction or not _files_match(local_path, info):
+            need_extract = self.force_extraction or not _files_match(local_path, info)
+
+            if need_extract:
                 tmp_extracted = self.temp_dir / info.filename
                 zf.extract(info, self.temp_dir)
                 shutil.copy2(tmp_extracted, local_path)
                 self.extracted_files.append(local_path)
-                self._log(f"[smart_extractor] EXTRACT model: {rel_path}")
+                self._log(f"[smart_extractor] EXTRACT generic: {rel_path}")
             else:
                 self.skipped_files.append(local_path)
-                self._log(f"[smart_extractor] SKIP model (identical): {rel_path}")
+                self._log(f"[-detection] SKIP generic (identical): {rel_path}")
 
     def _extract_custom_nodes(self, zf: zipfile.ZipFile):
         if self.force_extraction:
@@ -143,7 +153,7 @@ class SmartExtractor:
         }
 
         for node_name in node_dirs:
-            if not node_name or node_name.strip() == "":  # Skip ghost/empty
+            if not node_name or node_name.strip() == "":
                 continue
 
             zip_node_root = f"{node_prefix}{node_name}"
