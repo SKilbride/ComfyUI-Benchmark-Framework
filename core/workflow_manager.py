@@ -273,6 +273,8 @@ class WorkflowManager:
                     workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
                 elif class_type == "KSamplerAdvanced" and "noise_seed" in inputs:
                     workflow[node_id]["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
+                elif class_type == "RandomNoise" and "noise_seed" in inputs:
+                    workflow[node_id]["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
                 elif class_type == "PrimitiveInt" and "value" in inputs:
                     meta = node.get("_meta", {})
                     title = meta.get("title", "")
@@ -306,10 +308,12 @@ class WorkflowManager:
         modified = False
 
         for node_id, node in workflow_copy.items():
-            if node.get("class_type") == "SaveImage":
+            if node.get("class_type") in ("SaveImage", "SaveVideo", "SaveGLB"):
                 inputs = node.get("inputs", {})
                 if "filename_prefix" in inputs:
                     current_prefix = inputs["filename_prefix"]
+
+
 
                     if isinstance(current_prefix, str):
                         # Split into base path and filename part
