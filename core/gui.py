@@ -324,7 +324,7 @@ def run_gui(comfy_path: Path | None = None,
 
     return win.result
 
-def show_restart_required_dialog(package_manager, args, log_file=None):
+def show_restart_required_dialog(package_manager, args, python_exe, script_fpath, log_file=None):
     if not getattr(package_manager.extractor, "custom_nodes_extracted", False):
         return
 
@@ -349,12 +349,13 @@ def show_restart_required_dialog(package_manager, args, log_file=None):
 
     # === Build command ===
     cmd_parts = [
-        "python",
-        ".\\comfy-benchmark-framework\\run_comfyui_benchmark_framework.py",
+        python_exe,
+        script_fpath,
         "-c", f'"{args.comfy_path}"',
         "-w", f'"{args.workflow_path}"',
         "-p", str(args.port),
         "-g", str(args.generations),
+        "--gui",
     ]
     if getattr(args, "extract_minimal", False): cmd_parts.append("-e")
     if getattr(args, "run_default", False): cmd_parts.append("-r")

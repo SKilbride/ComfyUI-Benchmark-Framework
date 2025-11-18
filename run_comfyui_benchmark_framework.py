@@ -446,12 +446,15 @@ def main():
             port = base_port + i
             ports.append(port)
             if check_server_running(port):
-                if package_manager.extractor.custom_nodes_extracted:
+                if package_manager and package_manager.extractor and package_manager.extractor.custom_nodes_extracted:
                     print("Custom nodes were installed while a server was already running.  ComfyUI must be restarted before running the benchmark.")
                     show_restart_required_dialog(
                         package_manager=package_manager,
                         args=args,           # the argparse namespace
-                        log_file=log_file    # optional: pass log path
+                        python_exe=get_comfy_python(comfy_path),
+                        script_fpath=(__file__),
+                        log_file=log_file
+
                     )
 
                     # Optionally: exit after dialog so user can restart
