@@ -27,35 +27,67 @@ class WorkflowManager:
             with open(self.log_file, 'a', encoding='utf-8') as f:
                 f.write(message + '\n')
 
+
     def load_workflow(self):
-        """Load and validate the workflow JSON file."""
-        if self.workflow_path.suffix.lower() != '.json':
-            error_msg = f"Error: {self.workflow_path} must be a .json file."
-            self.log(error_msg)
-            raise ValueError(error_msg)
+        """Load ONLY API/flat format workflows. Reject full UI workflows with clear message."""
         if not self.workflow_path.exists():
-            error_msg = f"Error: Workflow file not found: {self.workflow_path}"
-            self.log(error_msg)
-            raise FileNotFoundError(error_msg)
+            raise FileNotFoundError(f"Workflow file not found: {self.workflow_path}")
+
+        if self.workflow_path.suffix.lower() != ".json":
+            raise ValueError(f"Workflow must be a .json file: {self.workflow_path}")
 
         self.log(f"Loading workflow: {self.workflow_path}")
+
         try:
-            with open(self.workflow_path, 'r', encoding='utf-8') as f:
-                self.workflow = json.load(f)
-            if not isinstance(self.workflow, dict):
-                error_msg = f"Error: {self.workflow_path} does not contain a valid JSON object (expected a dictionary)."
-                self.log(error_msg)
-                raise ValueError(error_msg)
-            # Validation is now non-fatal
+            with open(self.workflow_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+
+            # ------------------------------------------------------------------
+            # STRICT FORMAT CHECK: Must be API/flat format
+            # ------------------------------------------------------------------
+            if not isinstance(data, dict):
+                raise ValueError("Workflow root must be a JSON object {}")
+
+            # If it has "nodes" list → it's the full UI format → REJECT
+            if "nodes" in data and isinstance(data["nodes"], list):
+                raise ValueError(
+                    "ERROR: This is a FULL UI workflow (not API format)\n\n"
+                    "You saved the workflow using the regular 'Save' button.\n"
+                    "Please re-save it using:\n"
+                    "   → 'Save (API Format)' button in ComfyUI\n"
+                    "   (You may need to enable Dev Mode in settings)\n\n"
+                    "This benchmark tool ONLY accepts API-format workflows.\n"
+                    "Reason: They are smaller, faster, and 100% compatible with the /prompt API."
+                )
+
+            # If it has keys like "last_node_id", "version", etc. but no nodes → still reject
+            if any(key in data for key in ["last_node_id", "last_link_id", "version", "comfy_fork_version"]):
+                if not any(str(k).isdigit() for k in data.keys()):
+                    raise ValueError(
+                        "This appears to be a UI workflow metadata shell without nodes.\n"
+                        "Please use 'Save (API Format)' to export a valid prompt."
+                    )
+
+            # At this point: it should be flat dict with node IDs as keys
+            valid_node_ids = [k for k in data.keys() if str(k).isdigit() or (isinstance(k, str) and k.isdigit())]
+            if not valid_node_ids:
+                raise ValueError("No valid node entries found. This is not a valid API-format workflow.")
+
+            # Success — store as-is
+            self.workflow = data
+            self.log(f"Successfully loaded API-format workflow with {len(valid_node_ids)} nodes")
+
+            # Optional: lightweight validation
             self._validate_workflow()
-        except UnicodeDecodeError as e:
-            error_msg = f"Error: Failed to decode {self.workflow_path}. Ensure the file is encoded in UTF-8."
-            self.log(error_msg)
-            raise e
+
         except json.JSONDecodeError as e:
-            error_msg = f"Error: {self.workflow_path} is not a valid JSON file."
-            self.log(error_msg)
-            raise e
+            raise ValueError(f"Invalid JSON in workflow file: {e}")
+        except Exception as e:
+            # Re-raise with clear message
+            if "UI workflow" in str(e) or "Save (API Format)" in str(e):
+                raise  # already clear
+            else:
+                raise ValueError(f"Failed to load workflow: {e}")
 
     def _validate_workflow(self):
         """
@@ -217,36 +249,45 @@ class WorkflowManager:
                 self.log(f"Warning: Override {override_key} matched no nodes")
         self.workflow = modified_workflow
 
-    def get_workflow(self, randomize_seeds=True):
-        """
-        Get a copy of the workflow, optionally randomizing seeds for KSampler/PrimitiveInt nodes.
-
-        Args:
-            randomize_seeds (bool): If True, randomize seeds for KSampler and PrimitiveInt nodes.
-
-        Returns:
-            dict: A deep copy of the workflow JSON.
-        """
+    def get_workflow(self, randomize_seeds=False, override=None, instance_id=None, gen=None):
         if self.workflow is None:
-            error_msg = "Error: Workflow not loaded. Call load_workflow() first."
-            self.log(error_msg)
-            raise ValueError(error_msg)
+            raise ValueError("Workflow not loaded. Call load_workflow() first.")
 
-        workflow = json.loads(json.dumps(self.workflow))  # Deep copy
-        if randomize_seeds:
-            for node_id, node in workflow.items():
-                class_type = node.get("class_type")
-                inputs = node.get("inputs", {})
-                if class_type == "KSampler" and "seed" in inputs:
-                    workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
-                elif class_type == "KSamplerAdvanced" and "noise_seed" in inputs:
-                    workflow[node_id]["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
-                elif class_type == "PrimitiveInt" and "value" in inputs:
-                    meta = node.get("_meta", {})
-                    title = meta.get("title", "")
-                    if re.search(r"Random", title, re.IGNORECASE):
-                        workflow[node_id]["inputs"]["value"] = random.randint(0, 2**32 - 1)
-        return workflow
+        # Deep copy — preserves ALL nodes, including Reroute, Note, etc.
+        workflow_copy = json.loads(json.dumps(self.workflow))
+
+        modified = False
+
+        for node_id, node in workflow_copy.items():
+            # NEVER skip nodes — even if they have no class_type or inputs
+            if not isinstance(node, dict):
+                continue
+
+            class_type = node.get("class_type")
+            inputs = node.get("inputs", {})
+
+            # === Seed randomization (only on samplers) ===
+            if randomize_seeds and class_type in ["KSampler", "KSamplerAdvanced", "SamplerCustomAdvanced"]:
+                seed_key = "seed" if "seed" in inputs else "noise_seed"
+                if seed_key in inputs and isinstance(inputs[seed_key], (int, float)):
+                    inputs[seed_key] = random.randint(0, 2**64 - 1)
+                    modified = True
+
+            # === Filename prefix for SaveImage/SaveVideo ===
+            if class_type in ["SaveImage", "SaveVideo"] and "filename_prefix" in inputs:
+                prefix = inputs["filename_prefix"]
+                new_prefix = ""
+                if instance_id is not None:
+                    new_prefix += f"inst{instance_id}_"
+                if gen is not None:
+                    new_prefix += f"gen{gen:04d}_"
+                inputs["filename_prefix"] = new_prefix + str(prefix)
+                modified = True
+
+        if not modified:
+            self.log("No changes made to workflow (seeds/prefix)")
+
+        return workflow_copy
 
     def update_filename_prefixes_in_copy(self, workflow_copy, prefix_type, instance_num, gen_num, timestamp):
         """
