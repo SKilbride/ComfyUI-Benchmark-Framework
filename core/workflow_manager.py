@@ -249,45 +249,36 @@ class WorkflowManager:
                 self.log(f"Warning: Override {override_key} matched no nodes")
         self.workflow = modified_workflow
 
-    def get_workflow(self, randomize_seeds=False, override=None, instance_id=None, gen=None):
+    def get_workflow(self, randomize_seeds=True):
+        """
+        Get a copy of the workflow, optionally randomizing seeds for KSampler/PrimitiveInt nodes.
+
+        Args:
+            randomize_seeds (bool): If True, randomize seeds for KSampler and PrimitiveInt nodes.
+
+        Returns:
+            dict: A deep copy of the workflow JSON.
+        """
         if self.workflow is None:
-            raise ValueError("Workflow not loaded. Call load_workflow() first.")
+            error_msg = "Error: Workflow not loaded. Call load_workflow() first."
+            self.log(error_msg)
+            raise ValueError(error_msg)
 
-        # Deep copy — preserves ALL nodes, including Reroute, Note, etc.
-        workflow_copy = json.loads(json.dumps(self.workflow))
-
-        modified = False
-
-        for node_id, node in workflow_copy.items():
-            # NEVER skip nodes — even if they have no class_type or inputs
-            if not isinstance(node, dict):
-                continue
-
-            class_type = node.get("class_type")
-            inputs = node.get("inputs", {})
-
-            # === Seed randomization (only on samplers) ===
-            if randomize_seeds and class_type in ["KSampler", "KSamplerAdvanced", "SamplerCustomAdvanced"]:
-                seed_key = "seed" if "seed" in inputs else "noise_seed"
-                if seed_key in inputs and isinstance(inputs[seed_key], (int, float)):
-                    inputs[seed_key] = random.randint(0, 2**64 - 1)
-                    modified = True
-
-            # === Filename prefix for SaveImage/SaveVideo ===
-            if class_type in ["SaveImage", "SaveVideo"] and "filename_prefix" in inputs:
-                prefix = inputs["filename_prefix"]
-                new_prefix = ""
-                if instance_id is not None:
-                    new_prefix += f"inst{instance_id}_"
-                if gen is not None:
-                    new_prefix += f"gen{gen:04d}_"
-                inputs["filename_prefix"] = new_prefix + str(prefix)
-                modified = True
-
-        if not modified:
-            self.log("No changes made to workflow (seeds/prefix)")
-
-        return workflow_copy
+        workflow = json.loads(json.dumps(self.workflow))  # Deep copy
+        if randomize_seeds:
+            for node_id, node in workflow.items():
+                class_type = node.get("class_type")
+                inputs = node.get("inputs", {})
+                if class_type == "KSampler" and "seed" in inputs:
+                    workflow[node_id]["inputs"]["seed"] = random.randint(0, 2**32 - 1)
+                elif class_type == "KSamplerAdvanced" and "noise_seed" in inputs:
+                    workflow[node_id]["inputs"]["noise_seed"] = random.randint(0, 2**32 - 1)
+                elif class_type == "PrimitiveInt" and "value" in inputs:
+                    meta = node.get("_meta", {})
+                    title = meta.get("title", "")
+                    if re.search(r"Random", title, re.IGNORECASE):
+                        workflow[node_id]["inputs"]["value"] = random.randint(0, 2**32 - 1)
+        return workflow
 
     def update_filename_prefixes_in_copy(self, workflow_copy, prefix_type, instance_num, gen_num, timestamp):
         """
