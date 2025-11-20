@@ -658,17 +658,17 @@ def main():
         print(f"Benchmarking Package: {package_name}")
         if num_instances > 1:
             print(f"Number of Concurrent ComfyUI Instances: {num_instances}")
-            print(f"Number of Image Generations per Instance: {generations}")
+            print(f"Number of Generations per Instance: {generations}")
         else:
-            print(f"Number of Image Generations: {generations}")
+            print(f"Number of Generations: {generations}")
         
         if exec_times:
             print(f"Workflow Execution Time: {total_exec:.2f}s | Benchmark Execution Time: {wall_clock_time:.2f}s")
             #print(f"Overhead: {wall_clock_time - total_exec:.2f}s ({((wall_clock_time - total_exec) / wall_clock_time * 100):.1f}%)")
-            print(f"Images: {total_images} | Avg time per Image: {atpi:.2f}s | APM: {apm:.2f}")
+            print(f"Assets Generated: {total_images} | Avg time per Asset: {atpi:.2f}s | APM: {apm:.2f}")
         else:
             print("****Could not access internal ComfyUI runtime data, benchmark results may not be accurate****")
-            print(f"Total time: {wall_clock_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM: {apm:.2f}")
+            print(f"Total time: {wall_clock_time:.2f}s | Assets Generated: {total_images} | Avg/sec per Asset: {atpi:.2f} | APM: {apm:.2f}")
         print("#" * 50 + "\n")
 
         if log_file:
@@ -684,10 +684,10 @@ def main():
                 if exec_times:
                     f.write(f"Workflow Execution Time: {total_exec:.2f}s | Overall Benchmark Execution Time: {wall_clock_time:.2f}s\n")
                     #f.write(f"Overhead: {wall_clock_time - total_exec:.2f}s ({((wall_clock_time - total_exec) / wall_clock_time * 100):.1f}%)\n")
-                    f.write(f"Images: {total_images} | Avg Execution time per Image: {atpi:.2f}s | APM: {apm:.2f}\n")
+                    f.write(f"Assets Generated: {total_images} | Avg Execution time per Asset: {atpi:.2f}s | APM: {apm:.2f}\n")
                 else:
                     f.write("****Could not access internal ComfyUI runtime data, benchmark results may not be accurate****")
-                    f.write(f"Total time: {wall_clock_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM: {apm:.2f}\n")
+                    f.write(f"Total time: {wall_clock_time:.2f}s | Assets Generated: {total_images} | Avg/sec per Asset: {atpi:.2f} | APM: {apm:.2f}\n")
 
     except KeyboardInterrupt:
         print("User interrupt.")
