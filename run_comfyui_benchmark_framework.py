@@ -117,6 +117,10 @@ def get_comfy_python(comfy_path: Path) -> str:
     return sys.executable
 
 def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None, debug=False):
+    """
+    Wait for prompt completion and extract execution time from History API timestamps.
+    Returns: (history, exec_time_seconds or None)
+    """
     start_time = time.time()
     last_health_check = 0
     health_check_interval = 15
@@ -144,9 +148,38 @@ def wait_for_completion(prompt_id, server_address, timeout=600, instance_id=None
             if response.status_code == 200:
                 history = response.json()
                 if prompt_id in history:
-                    exec_time = time.time() - start_time
-                    print(f"Prompt {prompt_id} completed in {exec_time:.2f} seconds")
-                    return history
+                    wall_clock_time = time.time() - start_time
+                    prompt_data = history[prompt_id]
+                    
+                    # Extract execution time from status.messages timestamps
+                    exec_time = None
+                    status = prompt_data.get("status", {})
+                    messages = status.get("messages", [])
+                    
+                    # Look for execution_start and execution_success timestamps
+                    start_ts = None
+                    end_ts = None
+                    
+                    for msg in messages:
+                        if isinstance(msg, list) and len(msg) >= 2:
+                            msg_type = msg[0]
+                            msg_data = msg[1] if isinstance(msg[1], dict) else {}
+                            
+                            if msg_type == "execution_start" and "timestamp" in msg_data:
+                                start_ts = msg_data["timestamp"]
+                            elif msg_type == "execution_success" and "timestamp" in msg_data:
+                                end_ts = msg_data["timestamp"]
+                    
+                    # Calculate execution time from timestamps (in milliseconds)
+                    if start_ts is not None and end_ts is not None:
+                        exec_time = (end_ts - start_ts) / 1000.0  # Convert ms to seconds
+                    
+                    if exec_time is not None:
+                        print(f"Prompt {prompt_id} completed in {wall_clock_time:.2f}s (exec: {exec_time:.2f}s)")
+                    else:
+                        print(f"Prompt {prompt_id} completed in {wall_clock_time:.2f}s")
+                    
+                    return history, exec_time
                 elif debug:
                     print(f"[DEBUG] [{instance_id}] Prompt in history but not complete")
             elif response.status_code == 404 and debug:
@@ -264,6 +297,13 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
             except:
                 line = line.strip()
             line = line.replace('█', '#').replace('▌', '#').replace('▎', '#')
+            
+            # Check for execution time FIRST, before printing
+            match = pattern.search(line)
+            if match and capture_event.is_set() and not error_detected:
+                exec_time = float(match.group(1))
+                output_queue.put(exec_time)
+            
             with print_lock:
                 if error_pattern.search(line):
                     error_detected = True
@@ -288,16 +328,6 @@ def capture_execution_times(proc, output_queue, capture_event, print_lock, log_f
                     if log_file:
                         with open(log_file, 'a', encoding='utf-8') as f:
                             f.write(line + '\n')
-            if capture_event.is_set() and not error_detected:
-                match = pattern.search(line)
-                if match:
-                    exec_time = float(match.group(1))
-                    if exec_time > 1.0:
-                        print("\n")
-                        if log_file:
-                            with open(log_file, 'a', encoding='utf-8') as f:
-                                f.write("\n")
-                        output_queue.put(exec_time)
     with print_lock:
         if progress_buffer:
             print(f"\n{progress_buffer[-1]}", flush=True)
@@ -408,15 +438,20 @@ def main():
                 comfy_path=comfy_path,
                 temp_path=args.temp_path,
                 extract_minimal=args.extract_minimal,
-                force_extract=args.force_extract,   # <-- NEW
+                force_extract=args.force_extract,
                 log_file=log_file
             )
             workflow_path = package_manager.extract_zip()
             warmup_workflow_path = workflow_path.parent / "warmup.json" if not args.use_main_workflow_only else workflow_path
             if not warmup_workflow_path.exists():
                 warmup_workflow_path = workflow_path
-        elif workflow_path.suffix.lower() != '.json':
-            raise ValueError("Invalid workflow path")
+        elif workflow_path.suffix.lower() == '.json':
+            # Handle standalone .json file
+            warmup_workflow_path = workflow_path.parent / "warmup.json" if not args.use_main_workflow_only else workflow_path
+            if not warmup_workflow_path.exists():
+                warmup_workflow_path = workflow_path
+        else:
+            raise ValueError("Invalid workflow path: must be .zip, .json, or directory")
 
         workflow_manager = WorkflowManager(workflow_path=workflow_path, log_file=log_file)
         workflow_manager.load_workflow()
@@ -450,7 +485,7 @@ def main():
                     print("Custom nodes were installed while a server was already running.  ComfyUI must be restarted before running the benchmark.")
                     show_restart_required_dialog(
                         package_manager=package_manager,
-                        args=args,           # the argparse namespace
+                        args=args,
                         python_exe=get_comfy_python(comfy_path),
                         script_fpath=(__file__),
                         log_file=log_file
@@ -467,7 +502,7 @@ def main():
                 python_exe,
                 "main.py",
                 "--port", str(port),
-                "--disable-xformers",  # optional: if you get errors
+                "--disable-xformers",
                 *extra_args
             ]
             proc = subprocess.Popen(
@@ -497,6 +532,9 @@ def main():
             instance_num = idx + 1
 
             try:
+                # DON'T enable stdout capture - we'll use History API instead
+                # (stdout capture would create duplicates)
+                
                 print(f"[{instance_id}] Starting {'warmup' if is_warmup else f'gen {gen+1}'}")
                 manager = warmup_workflow_manager if is_warmup else workflow_manager
                 workflow = manager.get_workflow(randomize_seeds=True)
@@ -505,12 +543,13 @@ def main():
                 workflow = manager.update_filename_prefixes_in_copy(workflow, prefix_type, instance_num, gen_num, run_timestamp)
 
                 if benchmark_node_manager.exists:
+                    # Find existing Benchmark Workflow node
                     bid = next((nid for nid, n in workflow.items() if n.get("_meta", {}).get("title") == "Benchmark Workflow"), None)
-                    if not bid:
-                        bid = str(len(workflow) + 1)
-                        workflow[bid] = {"class_type": "BenchmarkWorkflow", "_meta": {"title": "Benchmark Workflow"}, "inputs": {"capture_benchmark": True, "file_prefix": "", "file_postfix": ""}}
-                    node = workflow[bid]
-                    node["inputs"]["file_postfix"] = "_warmup_" if is_warmup else f"_RUN_{gen+1}.{idx+1}"
+                    
+                    # Only modify if node already exists in workflow - don't create new ones
+                    if bid:
+                        node = workflow[bid]
+                        node["inputs"]["file_postfix"] = "_warmup_" if is_warmup else f"_RUN_{gen+1}.{idx+1}"
 
                 print(f"[{instance_id}] Queueing...")
                 resp = requests.post(f"http://{server_address}/prompt", json={"prompt": workflow, "client_id": client_id}, timeout=30)
@@ -519,10 +558,11 @@ def main():
                 prompt_id = resp.json()["prompt_id"]
                 print(f"[{instance_id}] Queued: {prompt_id}")
 
-                if not is_warmup:
-                    capture_events[idx].set()
+                history, exec_time = wait_for_completion(prompt_id, server_address, timeout=4000 if not is_warmup else 3600, instance_id=instance_id, debug=debug)
 
-                history = wait_for_completion(prompt_id, server_address, timeout=4000 if not is_warmup else 3600, instance_id=instance_id, debug=debug)
+                # Store execution time for non-warmup runs (from History API only)
+                if not is_warmup and exec_time:
+                    output_queues[idx].put(exec_time)
 
                 print(f"[{instance_id}] {'Warmup' if is_warmup else f'Gen {gen+1}'} completed")
             except Exception as e:
@@ -531,9 +571,6 @@ def main():
                     with open(log_file, 'a', encoding='utf-8') as f:
                         f.write(f"[{instance_id}] ERROR: {e}\n")
                 raise
-            finally:
-                if not is_warmup:
-                    capture_events[idx].clear()
 
         # === SAFE SEQUENTIAL WARMUP ===
         print("Performing SAFE sequential warmup to prevent VRAM OOM...")
@@ -582,16 +619,27 @@ def main():
             raise
 
         # METRICS
-        total_time = time.time() - start_time
+        wall_clock_time = time.time() - start_time
         total_images = num_instances * generations
         exec_times = []
         for q in output_queues:
             while not q.empty():
                 exec_times.append(q.get())
-        total_exec = sum(exec_times)
-        avg_exec = total_exec / len(exec_times) if exec_times else 0
-        apm = total_images / (total_time / 60) if total_time > 0 else 0
-        atpi = total_time / total_images if total_images > 0 else 0
+        
+        if exec_times:
+            total_exec = sum(exec_times)
+            avg_exec = total_exec / len(exec_times)
+            apm = total_images / (total_exec / 60) if total_exec > 0 else 0
+            atpi = total_exec / total_images if total_images > 0 else 0
+            
+            print(f"\nUsing History API timestamps: {len(exec_times)} measurements captured")
+        else:
+            # Fallback to wall clock time
+            total_exec = wall_clock_time
+            avg_exec = wall_clock_time / total_images if total_images > 0 else 0
+            apm = total_images / (wall_clock_time / 60) if wall_clock_time > 0 else 0
+            atpi = wall_clock_time / total_images if total_images > 0 else 0
+            print(f"\nWarning: No execution times captured, using wall clock time (includes HTTP overhead)")
 
         # === PACKAGE NAME ===
         package_name = "N/A"
@@ -613,7 +661,14 @@ def main():
             print(f"Number of Image Generations per Instance: {generations}")
         else:
             print(f"Number of Image Generations: {generations}")
-        print(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM (Assets per Minute): {apm:.2f}")
+        
+        if exec_times:
+            print(f"Workflow Execution Time: {total_exec:.2f}s | Benchmark Execution Time: {wall_clock_time:.2f}s")
+            #print(f"Overhead: {wall_clock_time - total_exec:.2f}s ({((wall_clock_time - total_exec) / wall_clock_time * 100):.1f}%)")
+            print(f"Images: {total_images} | Avg time per Image: {atpi:.2f}s | APM: {apm:.2f}")
+        else:
+            print("****Could not access internal ComfyUI runtime data, benchmark results may not be accurate****")
+            print(f"Total time: {wall_clock_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM: {apm:.2f}")
         print("#" * 50 + "\n")
 
         if log_file:
@@ -625,7 +680,14 @@ def main():
                     f.write(f"Number of Image Generations per Instance: {generations}\n")
                 else:
                     f.write(f"Number of Image Generations: {generations}\n")
-                f.write(f"Total time: {total_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM (Assets per Minute): {apm:.2f}")
+                
+                if exec_times:
+                    f.write(f"Workflow Execution Time: {total_exec:.2f}s | Overall Benchmark Execution Time: {wall_clock_time:.2f}s\n")
+                    #f.write(f"Overhead: {wall_clock_time - total_exec:.2f}s ({((wall_clock_time - total_exec) / wall_clock_time * 100):.1f}%)\n")
+                    f.write(f"Images: {total_images} | Avg Execution time per Image: {atpi:.2f}s | APM: {apm:.2f}\n")
+                else:
+                    f.write("****Could not access internal ComfyUI runtime data, benchmark results may not be accurate****")
+                    f.write(f"Total time: {wall_clock_time:.2f}s | Images: {total_images} | Avg/sec per Image: {atpi:.2f} | APM: {apm:.2f}\n")
 
     except KeyboardInterrupt:
         print("User interrupt.")

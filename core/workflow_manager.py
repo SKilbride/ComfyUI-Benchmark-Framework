@@ -73,7 +73,7 @@ class WorkflowManager:
             if not valid_node_ids:
                 raise ValueError("No valid node entries found. This is not a valid API-format workflow.")
 
-            # Success — store as-is
+            # Success – store as-is
             self.workflow = data
             self.log(f"Successfully loaded API-format workflow with {len(valid_node_ids)} nodes")
 
@@ -92,7 +92,7 @@ class WorkflowManager:
     def _validate_workflow(self):
         """
         Validate the workflow JSON, focusing on KSampler and KSamplerAdvanced nodes.
-        This is now non-fatal — logs warnings instead of raising errors.
+        This is now non-fatal – logs warnings instead of raising errors.
         """
         sampler_nodes = [
             (nid, node) for nid, node in self.workflow.items()
@@ -100,7 +100,7 @@ class WorkflowManager:
         ]
 
         if not sampler_nodes:
-            self.log("Validation skipped — no KSampler or KSamplerAdvanced nodes found. This is not an error.")
+            self.log("Validation skipped – no KSampler or KSamplerAdvanced nodes found. This is not an error.")
             return
 
         self.log(f"Validating {len(sampler_nodes)} sampler node(s)...")
@@ -313,9 +313,26 @@ class WorkflowManager:
                 if "filename_prefix" in inputs:
                     current_prefix = inputs["filename_prefix"]
 
+                    # CRITICAL: Skip if this is a node connection (list with node ID reference)
+                    # In ComfyUI API format, ["80", 0] means "connect to node 80, output 0"
+                    if isinstance(current_prefix, list):
+                        # Check if first element looks like a node ID (numeric string or int)
+                        if len(current_prefix) >= 2 and (isinstance(current_prefix[0], int) or 
+                            (isinstance(current_prefix[0], str) and current_prefix[0].isdigit())):
+                            self.log(f"Skipping filename_prefix in node {node_id}: it's a node connection {current_prefix}")
+                            continue
+                        # Otherwise it might be a list-wrapped string (uncommon)
+                        if len(current_prefix) > 0 and isinstance(current_prefix[0], str):
+                            orig = current_prefix[0]
+                            parts = orig.strip("/").split("/", 1)
+                            base_path = parts[0] if len(parts) > 1 else ""
+                            filename_part = parts[-1] if len(parts) > 1 else parts[0]
+                            new_path = f"{base_path}/{timestamp_folder}/{filename_part}_{suffix}" if base_path else f"{timestamp_folder}/{filename_part}_{suffix}"
+                            current_prefix[0] = new_path
+                            self.log(f"Updated filename_prefix (list) in node {node_id}: '{orig}' → '{new_path}'")
+                            modified = True
 
-
-                    if isinstance(current_prefix, str):
+                    elif isinstance(current_prefix, str):
                         # Split into base path and filename part
                         parts = current_prefix.strip("/").split("/", 1)
                         base_path = parts[0] if len(parts) > 1 else ""
@@ -326,16 +343,6 @@ class WorkflowManager:
 
                         inputs["filename_prefix"] = new_path
                         self.log(f"Updated filename_prefix in node {node_id}: '{current_prefix}' → '{new_path}'")
-                        modified = True
-
-                    elif isinstance(current_prefix, list) and len(current_prefix) > 0:
-                        orig = current_prefix[0]
-                        parts = orig.strip("/").split("/", 1)
-                        base_path = parts[0] if len(parts) > 1 else ""
-                        filename_part = parts[-1] if len(parts) > 1 else parts[0]
-                        new_path = f"{base_path}/{timestamp_folder}/{filename_part}_{suffix}" if base_path else f"{timestamp_folder}/{filename_part}_{suffix}"
-                        current_prefix[0] = new_path
-                        self.log(f"Updated filename_prefix (list) in node {node_id}: '{orig}' → '{new_path}'")
                         modified = True
 
         if not modified:
