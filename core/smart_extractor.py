@@ -76,14 +76,16 @@ class SmartExtractor:
         self._log(f"[smart_extractor] Mode: {mode}")
 
         with zipfile.ZipFile(self.zip_path, "r") as zf:
-            self._extract_root_jsons(zf)
+            # 1. Extract root files (including pre.py/post.py)
+            self._extract_root_files(zf)
 
             if not self.minimal:
-                # Generic extraction for everything except custom_nodes
+                # 2. Extract generic content
                 self._extract_generic_comfyui_contents(zf)
-                # custom_nodes keeps its special version-check logic
+                # 3. Extract custom nodes
                 self._extract_custom_nodes(zf)
 
+            # 4. Run scripts with output monitoring
             self._run_script_if_exists(self.temp_dir / "pre.py")
             self._run_script_if_exists(self.temp_dir / "post.py")
 
@@ -92,10 +94,12 @@ class SmartExtractor:
             raise FileNotFoundError("workflow.json not found after extraction")
         return workflow_path
 
-    def _extract_root_jsons(self, zf: zipfile.ZipFile):
+    def _extract_root_files(self, zf: zipfile.ZipFile):
+        """Extract JSON, YAML, and Python scripts from the root of the ZIP."""
         root_items = [i for i in zf.namelist()
-                      if i.lower().endswith(('.json', '.yaml', '.yml'))
+                      if i.lower().endswith(('.json', '.yaml', '.yml', '.py'))
                       and os.path.basename(i) == i]
+        
         for item in root_items:
             target = self.temp_dir / os.path.basename(item)
             zf.extract(item, self.temp_dir)
@@ -105,8 +109,6 @@ class SmartExtractor:
     def _extract_generic_comfyui_contents(self, zf: zipfile.ZipFile):
         """
         Extract everything under ComfyUI/ EXCEPT custom_nodes/
-        Uses the same smart (size-based) or force logic as the old model extraction.
-        Covers: models/, input/, loras/, vae/, styles/, upscale_models/, etc.
         """
         comfy_prefix = "ComfyUI/"
         items = [i for i in zf.infolist()
@@ -210,10 +212,45 @@ class SmartExtractor:
             shutil.rmtree(self.temp_dir / zip_node_root, ignore_errors=True)
 
     def _run_script_if_exists(self, script_path: Path):
+        """
+        Run a python script if it exists. 
+        Monitors stdout for 'BENCHMARK_RESTART_REQUIRED' to set restart flag.
+        """
         if script_path.exists():
             self._log(f"[smart_extractor] Running {script_path.name}...")
             try:
-                subprocess.check_call([sys.executable, str(script_path)], cwd=self.temp_dir)
+                # Use Popen to stream output and check for restart signal
+                process = subprocess.Popen(
+                    [sys.executable, str(script_path)],
+                    cwd=self.temp_dir,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.STDOUT,
+                    text=True,
+                    bufsize=1
+                )
+                
+                restart_signal = "BENCHMARK_RESTART_REQUIRED"
+                
+                while True:
+                    line = process.stdout.readline()
+                    if not line and process.poll() is not None:
+                        break
+                    if line:
+                        stripped_line = line.strip()
+                        print(stripped_line) # Echo to console for user visibility
+                        
+                        # Log to file if configured
+                        if self.log_file:
+                             with open(self.log_file, "a", encoding="utf-8") as f:
+                                f.write(stripped_line + "\n")
+                                
+                        if restart_signal in line:
+                            self.custom_nodes_extracted = True
+                            self._log(f"[smart_extractor] ⚠️ {script_path.name} requested ComfyUI restart")
+
+                if process.returncode != 0:
+                     raise subprocess.CalledProcessError(process.returncode, process.args)
+                     
             except subprocess.CalledProcessError as e:
                 self._log(f"[smart_extractor] ERROR in {script_path.name}: {e}")
                 raise
