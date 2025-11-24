@@ -2,6 +2,9 @@ requests
 PySide6
 qtpy
 pyyaml
+huggingface_hub
+tqdm
+tomli; python_version < "3.11"
 
 
 
