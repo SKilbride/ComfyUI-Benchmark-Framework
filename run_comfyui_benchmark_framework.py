@@ -354,6 +354,7 @@ def main():
     parser.add_argument("--extra_args", nargs=argparse.REMAINDER)
     parser.add_argument("--force-extract", "-f", action="store_true", help="Force re-extraction of all models/nodes even if identical/newer")
     parser.add_argument("--gui", action="store_true", help="Show a Qt-based GUI to pick -c and -w")
+    parser.add_argument("--timeout", type=int, default=4000, help="Timeout in seconds for prompt completion (default: 4000)")
 
     args = parser.parse_args()
 
@@ -481,7 +482,9 @@ def main():
             port = base_port + i
             ports.append(port)
             if check_server_running(port):
-                if package_manager and package_manager.extractor and package_manager.extractor.custom_nodes_extracted:
+                # FIX: Check the top-level package_manager flag, not just the nested extractor flag.
+                # The PackageManager aggregates results from both the SmartExtractor AND the ManifestIntegration.
+                if package_manager and getattr(package_manager, "custom_nodes_extracted", False):
                     print("Custom nodes were installed while a server was already running.  ComfyUI must be restarted before running the benchmark.")
                     show_restart_required_dialog(
                         package_manager=package_manager,

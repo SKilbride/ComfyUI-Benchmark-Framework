@@ -1,0 +1,37 @@
+[
+  {
+    "name": "Flux Krea - FP8",
+    "file": "FLUX1.KREA-T2I/flux.1_krea_fp8_1024x1024x20.zip",
+    "nvidia_recommended": true
+  },
+  {
+    "name": "Flux Krea - GGUF_Q8",
+    "file": "FLUX1.KREA-T2I/flux.1_krea_Q8_1024x1024x20.zip",
+    "nvidia_recommended": false
+  },
+  {
+    "name": "HUNYUAN 3D 2.1 - FP16",
+    "file": "HUNYUAN_3D/Hunyuan3D_2.1_FP16_30s_4096r_8000c-256o.zip",
+    "nvidia_recommended": true
+  },
+  {
+    "name": "WAN 2.2 - 4Step Lora - FP8",
+    "file": "WAN2.2-T2V-4StepLora/wan_2.2_t2v_14b_FP8_854x480x81x4sLora.zip",
+    "nvidia_recommended": true
+  },
+  {
+    "name": "WAN 2.2 - 4Step Lora - GGUF_Q8",
+    "file": "WAN2.2-T2V-4StepLora/wan_2.2_t2v_14b_Q8_854x480x81x4sLora.zip",
+    "nvidia_recommended": false
+  },
+  {
+    "name": "WAN 2.2 - 20 Step - FP8",
+    "file": "WAN2.2-T2V/wan_2.2_t2v_14b_FP8_854x480x81x20s.zip",
+    "nvidia_recommended": true
+  },
+  {
+    "name": "WAN 2.2 - 20 Step - GGUF_Q8",
+    "file": "WAN2.2-T2V/wan_2.2_t2v_14b_Q8_854x480x81x20s.zip",
+    "nvidia_recommended": false
+  }
+]

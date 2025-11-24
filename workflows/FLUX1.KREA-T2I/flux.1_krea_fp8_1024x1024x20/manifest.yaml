@@ -1,0 +1,94 @@
+# Benchmark Package Manifest
+# Version: 1.0.0
+
+package:
+  name: Flux1.Krea_FP8_benchmark
+  version: 1.0.0
+  description: Flux1.Krea Text-to-Image FP8 Benchmark
+  author: skilbride
+  comfyui_version: ">=0.3.0"
+
+config:
+  NUM_INSTANCES: 1
+  GENERATIONS: 10
+
+items:
+  # === WORKFLOWS (bundled in ZIP) ===
+  - name: workflow.json
+    type: workflow
+    source: bundled
+    path: workflow.json
+    required: true
+
+  - name: baseconfig.json
+    type: config
+    source: bundled
+    path: baseconfig.json
+    required: true
+
+  # === CUSTOM NODES ===
+  - name: comfyui-benchmark
+    type: custom_node
+    source: git
+    url: https://github.com/comfy-org/comfyui-benchmark.git
+    path: custom_nodes/comfyui-benchmark
+    required: true
+    install_requirements: true
+    description: Benchmark tracking node
+
+  # === DIFFUSION MODELS ===
+  - name: flux1.Krea
+    type: model
+    category: diffusion_models
+    source: huggingface
+    repo: Comfy-Org/FLUX.1-Krea-dev_ComfyUI
+    remote_path: Comfy-Org/FLUX.1-Krea-dev_ComfyUI/tree/main/split_files/diffusion_models
+    file: flux1-krea-dev_fp8_scaled.safetensors
+    path: models/diffusion_models/flux1-krea-dev_fp8_scaled.safetensors
+    required: true
+    gated: false
+    sha256: b17a8c21703c4d6ffb0e300dd920eff3cfd35c9a72a1abaf107e3788e408b8d8
+
+  # === TEXT ENCODERS ===
+  - name: t5xxl
+    type: model
+    category: text_encoders
+    source: huggingface
+    repo: Comfy-Org/stable-diffusion-3.5-fp8
+    remote_path: Comfy-Org/stable-diffusion-3.5-fp8/tree/main/text_encoders
+    file: t5xxl_fp8_e4m3fn_scaled.safetensors
+    path: models/text_encoders/t5xxl_fp8_e4m3fn_scaled.safetensors
+    required: true
+    sha256: a498f0485dc9536735258018417c3fd7758dc3bccc0a645feaa472b34955557a
+    
+  - name: clip-L
+    type: model
+    category: text_encoders
+    source: huggingface
+    repo: Comfy-Org/stable-diffusion-3.5-fp8
+    remote_path: Comfy-Org/stable-diffusion-3.5-fp8/tree/main/text_encoders
+    file: clip_l.safetensors
+    path: models/text_encoders/clip_l.safetensors
+    required: true
+    sha256: 660c6f5b1abae9dc498ac2d21e1347d2abdb0cf6c0c0c8576cd796491d9a6cdd
+
+  # === VAE ===
+  - name: wan_vae
+    type: model
+    category: vae
+    source: huggingface
+    repo: Comfy-Org/Lumina_Image_2.0_Repackaged
+    remote_path: Comfy-Org/Lumina_Image_2.0_Repackaged/tree/main/split_files/vae
+    file: ae.safetensors
+    path: models/vae/ae.safetensors
+    required: true
+    sha256: afc8e28272cd15db3919bacdb6918ce9c1ed22e96cb12c4d5ed0fba823529e38
+
+
+metadata:
+  total_size_mb: 35000
+  estimated_time: "10-30 minutes"
+  tags: [text-to-image, Flux1.Krea, FP8, benchmark]
+  details: "steps: 20, resolution: 1024x1024 precision: FP8"
+  created: "2025-01-19"
+  updated: "2025-01-19"
