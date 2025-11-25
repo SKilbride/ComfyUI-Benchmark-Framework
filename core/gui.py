@@ -453,6 +453,19 @@ def run_gui(comfy_path: Path | None = None,
     ok_btn.clicked.connect(on_ok)
     btn_row.addWidget(ok_btn)
 
+    # ------------------------------------------------------------------
+    # VALIDATE INPUTS (Disable OK if ComfyUI path is empty)
+    # ------------------------------------------------------------------
+    def validate_inputs():
+        """Enable OK button only if ComfyUI folder is provided."""
+        path_text = comfy_edit.text().strip()
+        ok_btn.setEnabled(bool(path_text))
+
+    # Connect to changes and run once immediately
+    comfy_edit.textChanged.connect(validate_inputs)
+    validate_inputs()
+    # ------------------------------------------------------------------
+
     cancel_btn = QPushButton("Cancel")
     cancel_btn.clicked.connect(win.close)
     btn_row.addWidget(cancel_btn)
@@ -470,7 +483,6 @@ def run_gui(comfy_path: Path | None = None,
     return win.result
 
 def show_restart_required_dialog(package_manager, args, python_exe, script_fpath, log_file=None):
-    # (This function remains unchanged)
     if not getattr(package_manager, "custom_nodes_extracted", False):
         return
 
