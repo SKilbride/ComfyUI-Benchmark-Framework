@@ -367,9 +367,8 @@ class ManifestHandler:
                 repo_id=repo_id,
                 filename=repo_filename,
                 local_dir=temp_download_dir, # Download into temp dir
-                local_dir_use_symlinks=False,
                 token=self.hf_token,
-                resume_download=self.resume_downloads
+                force_download=not self.resume_downloads 
             )
             
             # Move the actual file to the correct location
