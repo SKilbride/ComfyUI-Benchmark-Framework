@@ -7,10 +7,11 @@ import hashlib
 import shutil
 import subprocess
 import requests
+import uuid  
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from huggingface_hub import hf_hub_download, snapshot_download, HfApi
+from huggingface_hub import hf_hub_download, HfApi
 from tqdm import tqdm
 import time
 
@@ -204,15 +205,10 @@ class ManifestHandler:
                 elif file_status['reason'] == 'checksum_mismatch':
                     self.log(f"⚠ Re-downloading {item['name']} due to checksum mismatch", "WARNING")
             
-            # Check for gated models
-            if item.get('gated', False):
-                self.log(f"⚠ {item['name']} is gated - license acceptance required", "WARNING")
-                if not self.hf_token:
-                    self.log(f"✗ HF_TOKEN not set - cannot download gated model", "ERROR")
-                    self.log(f"  Visit: {item.get('license_url', 'Hugging Face')}")
-                    if item.get('required', False):
-                        raise Exception(f"Required gated model {item['name']} cannot be downloaded without HF_TOKEN")
-                    continue
+            # Check for gated models (simple pre-check, logic handled in download)
+            if item.get('gated', False) and not self.hf_token:
+                # We log warning here but let it proceed to download so exception can be caught by manifest_integration
+                self.log(f"⚠ {item['name']} is gated and no token set - may fail", "WARNING")
             
             download_list.append((item, existing.get(item['name'], {})))
         
@@ -242,6 +238,10 @@ class ManifestHandler:
             try:
                 self._download_item(item, verify_checksums)
             except Exception as e:
+                # Allow critical authentication errors to bubble up
+                if "401" in str(e) or "403" in str(e) or "HF_TOKEN" in str(e):
+                    raise
+                
                 if item.get('required', False):
                     raise Exception(f"Failed to download required item {item['name']}: {e}")
                 else:
@@ -264,6 +264,12 @@ class ManifestHandler:
                 try:
                     future.result()
                 except Exception as e:
+                    # Allow critical authentication errors to bubble up
+                    if "401" in str(e) or "403" in str(e) or "HF_TOKEN" in str(e):
+                        # Cancel remaining and raise
+                        executor.shutdown(wait=False, cancel_futures=True)
+                        raise
+                        
                     if item.get('required', False):
                         # Cancel remaining downloads and raise
                         executor.shutdown(wait=False, cancel_futures=True)
@@ -306,12 +312,11 @@ class ManifestHandler:
     
     def _get_partial_path(self, target_path: str) -> Path:
         """Get path for partial download file."""
-        # Create a safe filename from the target path
         safe_name = str(target_path).replace('/', '_').replace('\\', '_')
         return self.partial_download_dir / f"{safe_name}.partial"
     
     def _download_from_huggingface(self, item: Dict, verify_checksum: bool = True):
-        """Download from Hugging Face Hub with resume capability."""
+        """Download from Hugging Face Hub with temp directory cleanup."""
         self.log(f"↓ Downloading {item['name']} from Hugging Face...")
         
         repo_id = item['repo']
@@ -334,55 +339,59 @@ class ManifestHandler:
         # Build the full filename path in the repo
         repo_filename = f"{subfolder}/{filename}" if subfolder else filename
         
-        # Create parent directory
+        # Create parent directory for final destination
         local_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        # Get file info for progress bar
-        try:
-            api = HfApi(token=self.hf_token)
-            file_info = api.model_info(repo_id, files_metadata=True)
-            total_size = None
-            for sibling in file_info.siblings:
-                if sibling.rfilename == repo_filename:
-                    total_size = sibling.size
-                    break
-        except Exception as e:
-            self.log(f"  Could not get file size: {e}", "WARNING")
-            total_size = None
-        
-        # Check for remote SHA256
-        remote_checksum = None
-        try:
-            api = HfApi(token=self.hf_token)
-            file_metadata = api.get_paths_info(repo_id, paths=[repo_filename], repo_type="model")
-            if file_metadata and len(file_metadata) > 0:
-                remote_checksum = file_metadata[0].lfs.get('sha256') if hasattr(file_metadata[0], 'lfs') else None
-        except Exception:
-            pass
-        
-        manifest_checksum = item.get('sha256') or item.get('sha')
-        checksum_to_verify = manifest_checksum or remote_checksum
+
+        # === FIX FOR DIRECTORY CLUTTER ===
+        # Create a temp directory inside the parent folder to contain HF cache/structure
+        temp_dir_name = f".tmp_hf_{uuid.uuid4().hex[:8]}"
+        temp_download_dir = local_path.parent / temp_dir_name
+        temp_download_dir.mkdir(parents=True, exist_ok=True)
         
         try:
-            # Download with progress bar
+            # Check for remote SHA256 (optional metadata check)
+            remote_checksum = None
+            try:
+                api = HfApi(token=self.hf_token)
+                file_metadata = api.get_paths_info(repo_id, paths=[repo_filename], repo_type="model")
+                if file_metadata and len(file_metadata) > 0:
+                    remote_checksum = file_metadata[0].lfs.get('sha256') if hasattr(file_metadata[0], 'lfs') else None
+            except Exception:
+                pass
+            
+            manifest_checksum = item.get('sha256') or item.get('sha')
+            checksum_to_verify = manifest_checksum or remote_checksum
+            
+            # Download with progress bar to TEMP dir
             downloaded_path = hf_hub_download(
                 repo_id=repo_id,
                 filename=repo_filename,
-                local_dir=local_path.parent,
+                local_dir=temp_download_dir, # Download into temp dir
                 local_dir_use_symlinks=False,
                 token=self.hf_token,
                 resume_download=self.resume_downloads
             )
             
-            # Move to correct location if needed
-            if Path(downloaded_path) != local_path:
-                shutil.move(downloaded_path, local_path)
+            # Move the actual file to the correct location
+            # This extracts just the file we want from the messy HF structure
+            if Path(downloaded_path).exists():
+                shutil.move(str(downloaded_path), str(local_path))
+            else:
+                raise FileNotFoundError(f"Download failed, file not found at {downloaded_path}")
             
         except Exception as e:
             self.log(f"✗ Download failed: {e}", "ERROR")
             raise
         
-        # Verify checksum
+        finally:
+            # CLEANUP: Remove the temporary directory and all HF artifacts
+            if temp_download_dir.exists():
+                try:
+                    shutil.rmtree(temp_download_dir, ignore_errors=True)
+                except Exception:
+                    pass
+        
+        # Verify checksum of final file
         if verify_checksum and checksum_to_verify:
             self.log(f"  Verifying checksum...")
             if self._verify_checksum(local_path, checksum_to_verify):
@@ -405,13 +414,6 @@ class ManifestHandler:
     def _download_from_git(self, item: Dict) -> bool:
         """
         Clone from Git repository or update existing clone.
-        Returns True if downloaded/updated, False if skipped.
-        
-        Strategy:
-        1. If doesn't exist → clone
-        2. If exists but not a git repo → delete and clone
-        3. If exists and is git repo → try to update with git pull
-        4. If update fails → delete and clone as fallback
         """
         url = item['url']
         ref = item.get('ref', 'main')
@@ -479,7 +481,6 @@ class ManifestHandler:
     def _git_update_existing(self, item: Dict, url: str, ref: str, local_path: Path) -> bool:
         """
         Update existing Git repository using fetch + checkout + reset.
-        Falls back to fresh clone if update fails.
         """
         try:
             # Fetch latest from remote
@@ -586,7 +587,6 @@ class ManifestHandler:
             except Exception as e2:
                 # Last resort: rename to .backup
                 self.log(f"  Could not remove, renaming to .backup...", "WARNING")
-                import uuid
                 backup_path = path.parent / f".backup_{path.name}_{uuid.uuid4().hex[:8]}"
                 try:
                     if backup_path.exists():
