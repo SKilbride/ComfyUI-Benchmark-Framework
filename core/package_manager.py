@@ -66,7 +66,7 @@ class PackageManager:
         
         Returns path to extracted workflow.json
         """
-        self.temp_dir = self.temp_path / f"temp_{uuid.uuid4().hex}"
+        self.temp_dir = self.temp_path / f"temp_{uuid.uuid4().hex[:8]}"
         os.makedirs(self.temp_dir, exist_ok=True)
         self.created_temp_dir = True
         self.log(f"Extracting package to temp dir: {self.temp_dir}")
