@@ -576,3 +576,34 @@ def show_restart_required_dialog(package_manager, args, python_exe, script_fpath
 
     dialog.resize(680, dialog.sizeHint().height())
     dialog.exec_()
+
+def get_hf_token_dialog(parent=None):
+    """
+    Open a dialog to request the Hugging Face token from the user.
+    Returns the token string if OK is clicked, else None.
+    """
+    if not QT_AVAILABLE:
+        # Fallback for CLI mode
+        try:
+            return input("\n[Interact] Please enter your Hugging Face Token: ").strip() or None
+        except EOFError:
+            return None
+
+    # Ensure we have an application instance
+    app = QApplication.instance()
+    if not app:
+        app = QApplication(sys.argv)
+    
+    from qtpy.QtWidgets import QInputDialog, QLineEdit
+    
+    text, ok = QInputDialog.getText(
+        parent, 
+        "Hugging Face Token Required",
+        "This workflow uses gated models (e.g., Flux).\n"
+        "Please enter your Hugging Face Access Token (Read permission):",
+        QLineEdit.Password
+    )
+    
+    if ok and text:
+        return text.strip()
+    return None
