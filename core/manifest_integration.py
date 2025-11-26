@@ -171,15 +171,7 @@ class ManifestIntegration:
                         max_workers: int = 4) -> Tuple[bool, Optional[Dict]]:
         """
         Process manifest file to download required resources.
-        
-        Args:
-            skip_existing: Skip files that already exist with valid checksums
-            verify_checksums: Verify SHA256 checksums after download
-            parallel_downloads: Use parallel downloads
-            max_workers: Number of parallel download workers
-            
-        Returns:
-            Tuple of (success, manifest_config or None)
+        Includes interactive retry logic for gated models/missing tokens.
         """
         if not MANIFEST_HANDLER_AVAILABLE:
             self._log("[manifest_integration] Manifest handler not available")
@@ -218,18 +210,57 @@ class ManifestIntegration:
             # Get manifest config if present
             manifest_config = handler.manifest.get('config', {})
             
-            # Download items
-            self._log("\n[manifest_integration] Starting manifest downloads...")
-            handler.download_items(
-                skip_existing=skip_existing,
-                required_only=False,
-                verify_checksums=verify_checksums,
-                dry_run=False,
-                parallel=parallel_downloads
-            )
-            
-            # NEW: Only set flag if custom nodes were ACTUALLY downloaded (not skipped)
-            # This prevents unnecessary restart prompts when nodes already exist at correct version
+            # --- RETRY LOOP FOR GATED MODELS ---
+            max_retries = 3
+            attempt = 0
+            download_success = False
+
+            while attempt < max_retries:
+                try:
+                    self._log(f"\n[manifest_integration] Starting manifest downloads (Attempt {attempt+1}/{max_retries})...")
+                    
+                    handler.download_items(
+                        skip_existing=skip_existing,
+                        required_only=False,
+                        verify_checksums=verify_checksums,
+                        dry_run=False,
+                        parallel=parallel_downloads
+                    )
+                    download_success = True
+                    break # Success, exit loop
+                
+                except Exception as e:
+                    err_str = str(e)
+                    # Check for Gated Model / Missing Token errors
+                    # This catches the specific error raised in manifest_handler.py or generic 401/403s
+                    if "HF_TOKEN" in err_str or "gated model" in err_str or "401" in err_str or "403" in err_str:
+                        self._log(f"[manifest_integration] ⚠️ Authentication required: {e}")
+                        
+                        # Dynamically import GUI dialog to avoid circular imports
+                        try:
+                            from .gui import get_hf_token_dialog
+                            new_token = get_hf_token_dialog()
+                            
+                            if new_token:
+                                self._log("[manifest_integration] Token received from user. Retrying...")
+                                os.environ["HF_TOKEN"] = new_token
+                                handler.hf_token = new_token # Update existing handler instance
+                                attempt += 1
+                                continue
+                            else:
+                                self._log("[manifest_integration] Token request cancelled by user.")
+                                raise e # User cancelled, re-raise original error
+                        except ImportError:
+                            self._log("[manifest_integration] GUI unavailable for token input.")
+                            raise e
+                    else:
+                        # Not an auth error, re-raise immediately
+                        raise e
+
+            if not download_success:
+                return False, None
+
+            # New: Only set flag if custom nodes were ACTUALLY downloaded (not skipped)
             if handler.custom_nodes_were_downloaded():
                 self.custom_nodes_installed = True
                 self._log("[manifest_integration] ✅ Custom nodes installed via manifest")
@@ -245,8 +276,10 @@ class ManifestIntegration:
             
         except Exception as e:
             self._log(f"[manifest_integration] ❌ Error processing manifest: {e}")
-            import traceback
-            traceback.print_exc()
+            # Do not print stack trace for simple token errors to keep log clean
+            if "HF_TOKEN" not in str(e):
+                import traceback
+                traceback.print_exc()
             return False, None
     
     def get_baseconfig_from_manifest(self) -> Optional[Dict]:
