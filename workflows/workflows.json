@@ -1,5 +1,25 @@
 [
   {
+    "name": "Flux Dev - NVFP4",
+    "file": "FLUX1.DEV-T2I/flux.1_dev_nvfp4_1024x1024x20.zip",
+    "nvidia_recommended": true
+  },
+  {
+    "name": "Flux Dev - FP8",
+    "file": "FLUX1.DEV-T2I/flux.1_dev_fp8_1024x1024x20.zip",
+    "nvidia_recommended": true
+  },
+  {
+    "name": "Flux Dev - GGUF_Q8",
+    "file": "FLUX1.DEV-T2I/flux.1_dev_Q8_1024x1024x20.zip",
+    "nvidia_recommended": false
+  },
+  {
+    "name": "Flux Dev - BF16",
+    "file": "FLUX1.DEV-T2I/flux.1_dev_bf16_1024x1024x20.zip",
+    "nvidia_recommended": true
+  },
+  {
     "name": "Flux Krea - FP8",
     "file": "FLUX1.KREA-T2I/flux.1_krea_fp8_1024x1024x20.zip",
     "nvidia_recommended": true
