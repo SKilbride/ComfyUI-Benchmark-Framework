@@ -19,6 +19,7 @@ from core.workflow_manager import WorkflowManager
 from core.package_manager import PackageManager
 from core.gui import run_gui
 from core.gui import show_restart_required_dialog
+from core.vram_monitor import VRAMMonitor, PYNVML_AVAILABLE
 
 
 class YamlObject:
@@ -355,6 +356,10 @@ def main():
     parser.add_argument("--force-extract", "-f", action="store_true", help="Force re-extraction of all models/nodes even if identical/newer")
     parser.add_argument("--gui", action="store_true", help="Show a Qt-based GUI to pick -c and -w")
     parser.add_argument("--timeout", type=int, default=4000, help="Timeout in seconds for prompt completion (default: 4000)")
+    parser.add_argument("--vram-monitor", action="store_true", help="Enable automatic VRAM monitoring using pynvml")
+    parser.add_argument("--vram-log", type=str, help="Path to save detailed VRAM CSV log")
+    parser.add_argument("--vram-interval", type=float, default=0.5, help="VRAM sampling interval in seconds (default: 0.5)")
+    parser.add_argument("--gpu-index", type=int, default=0, help="GPU index to monitor (default: 0)")
 
     args = parser.parse_args()
 
@@ -575,6 +580,33 @@ def main():
                         f.write(f"[{instance_id}] ERROR: {e}\n")
                 raise
 
+        # === VRAM MONITOR SETUP ===
+        vram_monitor = None
+        vram_results = None
+        if args.vram_monitor or args.vram_log:
+            if PYNVML_AVAILABLE:
+                # Generate CSV log path if not specified but monitoring is enabled
+                csv_log_path = args.vram_log
+                if not csv_log_path and args.vram_monitor:
+                    workflow_basename = Path(args.workflow_path).stem
+                    timestamp = datetime.now().strftime("%y%m%d_%H%M%S")
+                    csv_log_path = str(Path(f"gpu_log_{workflow_basename}_{timestamp}.csv").resolve())
+                
+                vram_monitor = VRAMMonitor(
+                    gpu_index=args.gpu_index,
+                    sample_interval=args.vram_interval,
+                    csv_log=csv_log_path,
+                    log_file=log_file
+                )
+                # Capture idle VRAM before anything loads
+                vram_monitor.capture_idle_vram()
+                print(f"[VRAM Monitor] CSV log will be saved to: {csv_log_path}")
+                if log_file:
+                    with open(log_file, 'a', encoding='utf-8') as f:
+                        f.write(f"VRAM monitoring enabled, CSV log: {csv_log_path}\n")
+            else:
+                print("[WARNING] VRAM monitoring requested but pynvml not installed. Run: pip install pynvml")
+
         # === SAFE SEQUENTIAL WARMUP ===
         print("Performing SAFE sequential warmup to prevent VRAM OOM...")
         if log_file:
@@ -608,6 +640,11 @@ def main():
         for q in output_queues:
             while not q.empty(): q.get()
 
+        # Start VRAM monitoring for main benchmark
+        if vram_monitor:
+            vram_monitor.start()
+            print("[VRAM Monitor] Started for main benchmark run")
+
         # MAIN RUN
         start_time = time.time()
         try:
@@ -620,6 +657,12 @@ def main():
         except KeyboardInterrupt:
             print("Interrupted. Partial metrics...")
             raise
+
+        # Stop VRAM monitoring and get results
+        if vram_monitor:
+            peak_vram, idle_vram, delta_vram = vram_monitor.stop()
+            vram_results = vram_monitor.get_results_summary()
+            print(f"[VRAM Monitor] Results: Peak={peak_vram:.0f}MB, Idle={idle_vram:.0f}MB, Delta={delta_vram:.0f}MB")
 
         # METRICS
         wall_clock_time = time.time() - start_time
@@ -659,6 +702,8 @@ def main():
         print("\n" + "#" * 50)
         print("####_RESULTS_SUMMARY_####")
         print(f"Benchmarking Package: {package_name}")
+        if vram_results:
+            print(f"VRAM: {vram_results['peak_vram_mb']:.0f} MB ({vram_results['peak_vram_gb']:.2f} GB) | Delta: {vram_results['delta_vram_mb']:.0f} MB")
         if num_instances > 1:
             print(f"Number of Concurrent ComfyUI Instances: {num_instances}")
             print(f"Number of Generations per Instance: {generations}")
@@ -678,6 +723,8 @@ def main():
             with open(log_file, 'a', encoding='utf-8') as f:
                 f.write('####_RESULTS_SUMMARY_####\n')
                 f.write(f"Benchmarking Package: {package_name}\n")
+                if vram_results:
+                    f.write(f"VRAM: {vram_results['peak_vram_mb']:.0f} MB ({vram_results['peak_vram_gb']:.2f} GB) | Delta: {vram_results['delta_vram_mb']:.0f} MB\n")
                 if num_instances > 1:
                     f.write(f"Number of Concurrent ComfyUI Instances: {num_instances}\n")
                     f.write(f"Number of Image Generations per Instance: {generations}\n")
@@ -694,6 +741,12 @@ def main():
 
     except KeyboardInterrupt:
         print("User interrupt.")
+        # Stop VRAM monitor on interrupt
+        if 'vram_monitor' in dir() and vram_monitor:
+            try:
+                vram_monitor.stop()
+            except:
+                pass
     finally:
         if args.no_cleanup:
             print("Skipping cleanup (--no-cleanup)")
