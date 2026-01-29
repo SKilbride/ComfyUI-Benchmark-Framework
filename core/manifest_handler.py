@@ -440,6 +440,8 @@ class ManifestHandler:
                 cwd=local_path,
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 check=True,
                 timeout=10
             )
@@ -450,6 +452,8 @@ class ManifestHandler:
                 ['git', 'ls-remote', url, ref],
                 capture_output=True,
                 text=True,
+                encoding='utf-8',
+                errors='replace',
                 check=True,
                 timeout=30
             )
