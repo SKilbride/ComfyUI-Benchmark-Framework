@@ -205,7 +205,8 @@ class SmartExtractor:
                 try:
                     subprocess.check_call([
                         sys.executable, "-m", "pip", "install", "-r", str(req_path)
-                    ], cwd=local_node_root)
+                    ], cwd=local_node_root,
+                       text=True, encoding='utf-8', errors='replace')
                 except subprocess.CalledProcessError as e:
                     self._log(f"[smart_extractor] FAILED requirements for {node_name}: {e}")
 

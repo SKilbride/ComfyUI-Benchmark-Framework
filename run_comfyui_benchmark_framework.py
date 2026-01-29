@@ -513,10 +513,13 @@ def main():
                 "--disable-xformers",
                 *extra_args
             ]
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            env["PYTHONUTF8"] = "1"
             proc = subprocess.Popen(
                 cmd, cwd=comfy_path, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                 creationflags=subprocess.CREATE_NEW_PROCESS_GROUP if sys.platform == "win32" else 0,
-                text=True, encoding='utf-8', errors='replace', bufsize=1
+                text=True, encoding='utf-8', errors='replace', bufsize=1, env=env
             )
             processes.append(proc)
             print(f"Started instance {i+1} on port {port} (PID: {proc.pid})")
