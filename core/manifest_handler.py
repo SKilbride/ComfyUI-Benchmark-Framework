@@ -493,6 +493,7 @@ class ManifestHandler:
                 cwd=local_path,
                 check=True,
                 capture_output=True,
+                text=True, encoding='utf-8', errors='replace',
                 timeout=60
             )
             
@@ -503,6 +504,7 @@ class ManifestHandler:
                 cwd=local_path,
                 check=True,
                 capture_output=True,
+                text=True, encoding='utf-8', errors='replace',
                 timeout=30
             )
             
@@ -513,6 +515,7 @@ class ManifestHandler:
                     cwd=local_path,
                     check=True,
                     capture_output=True,
+                    text=True, encoding='utf-8', errors='replace',
                     timeout=30
                 )
             except subprocess.CalledProcessError:
@@ -522,6 +525,7 @@ class ManifestHandler:
                     cwd=local_path,
                     check=True,
                     capture_output=True,
+                    text=True, encoding='utf-8', errors='replace',
                     timeout=30
                 )
             
@@ -553,7 +557,8 @@ class ManifestHandler:
                 '--branch', ref,
                 '--progress',
                 url, str(local_path)
-            ], check=True, capture_output=False)
+            ], check=True, capture_output=False,
+               text=True, encoding='utf-8', errors='replace')
         except subprocess.CalledProcessError as e:
             self.log(f"✗ Git clone failed: {e}", "ERROR")
             raise
@@ -610,7 +615,8 @@ class ManifestHandler:
                 try:
                     subprocess.run([
                         sys.executable, '-m', 'pip', 'install', '-r', str(req_file)
-                    ], check=True, capture_output=False)
+                    ], check=True, capture_output=False,
+                       text=True, encoding='utf-8', errors='replace')
                     self.log(f"  ✓ Requirements installed")
                 except subprocess.CalledProcessError as e:
                     self.log(f"  ⚠ Requirements installation failed: {e}", "WARNING")
